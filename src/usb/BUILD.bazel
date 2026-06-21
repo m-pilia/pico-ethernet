@@ -1,0 +1,37 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+# Our TinyUSB config (enables the CDC-ECM net class). Wired in via the
+# PICO_TINYUSB_CONFIG label flag; see .bazelrc.
+cc_library(
+    name = "tusb_config",
+    hdrs = ["tusb_config.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+
+# USB descriptor callbacks (device, configuration, strings) for CDC-ECM.
+cc_library(
+    name = "usb_descriptors",
+    srcs = ["usb_descriptors.cpp"],
+    # Only TinyUSB references these descriptor callbacks, so force the object
+    # into the link rather than letting the archive member be dropped.
+    alwayslink = True,
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/mac:mac_address",
+        "@pico-sdk//bazel/config:PICO_TINYUSB_LIB",
+        "@pico-sdk//src/rp2_common/tinyusb:tinyusb_port",
+    ],
+)
+
+cc_library(
+    name = "cdc_ecm_device",
+    srcs = ["cdc_ecm_device.cpp"],
+    hdrs = ["cdc_ecm_device.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/mac:mac_address",
+        "@pico-sdk//bazel/config:PICO_TINYUSB_LIB",
+        "@pico-sdk//src/rp2_common/tinyusb:tinyusb_port",
+    ],
+)

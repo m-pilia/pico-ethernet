@@ -1,0 +1,47 @@
+common --enable_bzlmod
+common --check_direct_dependencies=off
+
+build --cxxopt=-Wall
+build --cxxopt=-Wextra
+build --cxxopt=--pedantic
+build --cxxopt=-fno-exceptions
+build --cxxopt=-fno-rtti
+build --cxxopt=-std=c++23
+build --cxxopt=-fdiagnostics-color=always
+
+build:dbg --copt=-g3
+
+build:opt --copt=-O2
+
+# Register toolchains from pico-sdk
+build --extra_toolchains=@pico-sdk//bazel/toolchain:linux-x86_64-rp2350
+
+# RP2350 build config
+build:rp2350 --platforms=@pico-sdk//bazel/platform:rp2350
+# Use our patched TinyUSB (adds ECM link-state control; see MODULE.bazel) and
+# our TinyUSB config (enables the CDC-ECM net class).
+build:rp2350 --@pico-sdk//bazel/config:PICO_TINYUSB_LIB=@patched_tinyusb//:tinyusb
+build:rp2350 --@pico-sdk//bazel/config:PICO_TINYUSB_CONFIG=//src/usb:tusb_config
+build:rp2350 --aspects @pico-sdk//tools:uf2_aspect.bzl%pico_uf2_aspect
+build:rp2350 --output_groups=+pico_uf2_files
+
+build:asan --copt=-fsanitize=address
+build:asan --copt=-fno-omit-frame-pointer
+build:asan --copt=-O1
+build:asan --copt=-g
+build:asan --linkopt=-fsanitize=address
+build:asan --strip=never
+build:asan --test_env=ASAN_OPTIONS=halt_on_error=1:detect_leaks=1
+
+build:ubsan --copt=-fsanitize=undefined
+build:ubsan --copt=-fno-sanitize-recover=all
+build:ubsan --copt=-fno-omit-frame-pointer
+build:ubsan --copt=-g
+build:ubsan --linkopt=-fsanitize=undefined
+build:ubsan --strip=never
+build:ubsan --test_env=UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+
+test --test_output=errors
+
+# Suppress warnings from third party code
+build --output_filter='^//'

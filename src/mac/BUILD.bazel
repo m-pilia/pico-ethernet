@@ -1,0 +1,8 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+# MAC address library (header-only; fully constexpr).
+cc_library(
+    name = "mac_address",
+    hdrs = ["mac_address.h"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,8 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "led_heartbeat",
+    hdrs = ["led_heartbeat.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@pico-sdk//src/rp2_common/pico_stdlib"],
+)

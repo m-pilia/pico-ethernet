@@ -1,0 +1,38 @@
+module(
+    name = "pico_ethernet",
+    version = "0.1.0",
+)
+
+# Core build rules
+bazel_dep(name = "rules_cc", version = "0.2.17")
+
+# Pico SDK - uses master branch which has Bazel support
+bazel_dep(name = "pico-sdk", version = "2.2.0")
+
+# Testing framework - googletest includes googlemock
+bazel_dep(name = "googletest", version = "1.17.0")
+
+# Generates compile_commands.json for clangd/IDE tooling. Not on the Bazel
+# Central Registry and untagged, so it is pinned to a main-branch commit.
+bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
+git_override(
+    module_name = "hedron_compile_commands",
+    commit = "abb61a688167623088f8768cc9264798df6a9d10",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
+)
+
+# The Pico SDK bundles TinyUSB 0.18.0, whose ECM driver hardcodes the link as
+# "connected" and so cannot report an unplugged cable. We re-fetch the same
+# commit and apply a small feature-only patch adding tud_network_link_state(),
+# then point PICO_TINYUSB_LIB at it (see .bazelrc). This keeps the firmware on
+# stock TinyUSB plus a reviewable ~20-line diff rather than a vendored fork.
+new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
+
+new_git_repository(
+    name = "patched_tinyusb",
+    build_file = "//patches:tinyusb.BUILD",
+    commit = "86ad6e56c1700e85f1c5678607a762cfe3aa2f47",  # keep-in-sync-with pico-sdk lib/tinyusb
+    patch_args = ["-p1"],
+    patches = ["//patches:tinyusb_ecm_link_state.patch"],
+    remote = "https://github.com/hathach/tinyusb.git",
+)

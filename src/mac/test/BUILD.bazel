@@ -1,0 +1,12 @@
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+cc_test(
+    name = "mac_address_test",
+    srcs = ["mac_address_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:mac_address",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)

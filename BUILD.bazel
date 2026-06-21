@@ -1,0 +1,9 @@
+load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
+
+refresh_compile_commands(
+    name = "refresh_compile_commands",
+    targets = {
+        "//src:pico_ethernet_firmware": "--config=rp2350",
+        "//src/mac/test:mac_address_test": "",
+    },
+)

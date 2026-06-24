@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Martino Pilia
-//
-// Pico 2 Ethernet NIC - MAC Address Unit Tests
-// Phase 1: MAC address generation with unit tests
 
 #include <gtest/gtest.h>
 
@@ -16,8 +13,8 @@
 
 namespace pico_ethernet {
 
-// Build a MacAddress from six octets. The public API takes a span (Phase 2
-// extracts addresses from frame buffers); this keeps the test literals readable.
+// Build a MacAddress from six octets. The public API takes a span (addresses are
+// extracted from frame buffers); this keeps the test literals readable.
 constexpr MacAddress make_mac(MacAddress::Bytes bytes) {
     return MacAddress(std::span<const std::uint8_t, MacAddress::LENGTH>(bytes));
 }
@@ -29,7 +26,10 @@ static_assert(MacAddress::parse("02:00:00:00:00:01") == MacAddress::generate_def
 static_assert(MacAddress::parse("020000000001") == MacAddress::generate_default());
 static_assert(!MacAddress::parse("nope").has_value());
 static_assert(make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}).is_multicast());
+static_assert(make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}).is_broadcast());
+static_assert(!make_mac({0x01, 0x00, 0x5E, 0x00, 0x00, 0x01}).is_broadcast());
 static_assert(!MacAddress::generate_default().is_multicast());
+static_assert(!MacAddress::generate_default().is_broadcast());
 static_assert(MacAddress::generate_default().to_ecm_string()[0] == '0');
 static_assert(MacAddress::generate_default().to_string()[2] == ':');
 
@@ -80,7 +80,7 @@ TEST_F(MacAddressTest, byte_out_of_range_asserts) {
 #endif
 
 TEST_F(MacAddressTest, construction_from_span) {
-    // Phase 2: extract a MAC from the first six octets of a larger buffer.
+    // Extract a MAC from the first six octets of a larger buffer.
     const std::array<std::uint8_t, 8> frame = {0x02, 0x00, 0x00, 0x00,
                                           0x00, 0x01, 0xAA, 0xBB};
     const auto mac = MacAddress(std::span<const std::uint8_t, MacAddress::LENGTH>(
@@ -184,12 +184,27 @@ TEST_F(MacAddressTest, broadcast_is_group_address) {
     const auto broadcast = make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF});
 
     EXPECT_TRUE(broadcast.is_multicast());
+    EXPECT_TRUE(broadcast.is_broadcast());
 }
 
 TEST_F(MacAddressTest, multicast_address) {
     const auto multicast = make_mac({0x01, 0x00, 0x5E, 0x00, 0x00, 0x01});
 
     EXPECT_TRUE(multicast.is_multicast());
+    EXPECT_FALSE(multicast.is_broadcast());
+}
+
+TEST_F(MacAddressTest, unicast_is_neither_group_nor_broadcast) {
+    const auto unicast = MacAddress::generate_default();
+
+    EXPECT_FALSE(unicast.is_multicast());
+    EXPECT_FALSE(unicast.is_broadcast());
+}
+
+TEST_F(MacAddressTest, almost_broadcast_is_not_broadcast) {
+    // A single non-0xFF octet must disqualify the broadcast match.
+    EXPECT_FALSE(make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE}).is_broadcast());
+    EXPECT_FALSE(make_mac({0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}).is_broadcast());
 }
 
 TEST_F(MacAddressTest, iteration) {

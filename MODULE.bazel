@@ -21,18 +21,20 @@ git_override(
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
 )
 
-# The Pico SDK bundles TinyUSB 0.18.0, whose ECM driver hardcodes the link as
-# "connected" and so cannot report an unplugged cable. We re-fetch the same
-# commit and apply a small feature-only patch adding tud_network_link_state(),
-# then point PICO_TINYUSB_LIB at it (see .bazelrc). This keeps the firmware on
-# stock TinyUSB plus a reviewable ~20-line diff rather than a vendored fork.
+# The Pico SDK bundles an older TinyUSB whose ECM driver lacks the link-state
+# and Ethernet packet-filter callbacks we rely on. We instead fetch a newer
+# upstream TinyUSB that provides tud_network_link_state() and
+# tud_network_set_packet_filter_cb() natively, and point PICO_TINYUSB_LIB at it
+# (see .bazelrc). This replaces the former keep-in-sync pin plus local
+# link-state patch with stock upstream TinyUSB. The one remaining local diff
+# adds a SetEthernetMulticastFilters callback the ECM driver does not yet expose.
 new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 
 new_git_repository(
     name = "patched_tinyusb",
     build_file = "//patches:tinyusb.BUILD",
-    commit = "86ad6e56c1700e85f1c5678607a762cfe3aa2f47",  # keep-in-sync-with pico-sdk lib/tinyusb
+    commit = "94d5e74f63d49131d733cc847f1aa71c558101ac",  # upstream master: native link-state + packet-filter callbacks
     patch_args = ["-p1"],
-    patches = ["//patches:tinyusb_ecm_link_state.patch"],
+    patches = ["//patches:tinyusb_ecm_multicast_filter.patch"],
     remote = "https://github.com/hathach/tinyusb.git",
 )

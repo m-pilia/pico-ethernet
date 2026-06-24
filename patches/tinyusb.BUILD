@@ -16,7 +16,6 @@ exports_files(
 cc_library(
     name = "tinyusb",
     srcs = [
-        "hw/bsp/rp2040/family.c",
         "src/class/audio/audio_device.c",
         "src/class/cdc/cdc_device.c",
         "src/class/dfu/dfu_device.c",
@@ -31,7 +30,6 @@ cc_library(
         "src/class/video/video_device.c",
         "src/common/tusb_fifo.c",
         "src/device/usbd.c",
-        "src/device/usbd_control.c",
         "src/portable/raspberrypi/rp2040/dcd_rp2040.c",
         "src/portable/raspberrypi/rp2040/rp2040_usb.c",
         "src/tusb.c",

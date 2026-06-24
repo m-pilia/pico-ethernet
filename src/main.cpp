@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Martino Pilia
-//
-// Pico 2 Ethernet NIC - Main Entry Point
-// Phase 1: present the Pico 2 to a Linux host as a CDC-ECM Ethernet NIC whose
-// link is down ("cable unplugged"), since the PHY layer is not implemented yet.
 
 #include <cstdint>
 
@@ -19,7 +15,7 @@ int main() {
     device.initialize();
 
     pico_ethernet::LedHeartbeat led{LED_PIN};
-    led.bad();  // Phase 1: the link is always down ("cable unplugged").
+    led.good();
 
     while (true) {
         device.task();

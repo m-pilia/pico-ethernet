@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Martino Pilia
 //
-// Pico 2 Ethernet NIC - LED Heartbeat
 // Blinks a status LED to signal device health using a hardware repeating timer,
 // so it runs autonomously without any polling from the main loop. The caller
 // selects a rate with good()/bad() and can stop the blink with stop().

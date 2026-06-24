@@ -1,4 +1,4 @@
 exports_files([
     "tinyusb.BUILD",
-    "tinyusb_ecm_link_state.patch",
+    "tinyusb_ecm_multicast_filter.patch",
 ])

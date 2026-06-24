@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Martino Pilia
 //
-// Pico 2 Ethernet NIC - TinyUSB configuration
-// Phase 1: CDC-ECM device, full speed, single configuration.
-//
 // CFG_TUSB_MCU / CFG_TUSB_OS / CFG_TUSB_DEBUG are supplied by the Pico SDK
 // tinyusb_port target, so they are only defaulted defensively here.
 

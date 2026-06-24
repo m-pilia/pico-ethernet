@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Martino Pilia
-//
-// Pico 2 Ethernet NIC - MAC Address Implementation
-// Phase 1: MAC address generation with unit tests
 
 #ifndef MAC_MAC_ADDRESS_H
 #define MAC_MAC_ADDRESS_H
@@ -100,8 +97,16 @@ public:
     }
 
     // A group address (multicast or broadcast): bit 0 of the first octet set.
-    // Used by Phase 2 frame filtering (accept our address or any group address).
+    // Used by frame filtering (accept our address or any group address).
     constexpr bool is_multicast() const { return (address_[0] & 0x01) != 0; }
+
+    // The broadcast address (all ones), a special case of a group address.
+    constexpr bool is_broadcast() const {
+        for (const std::uint8_t octet : address_) {
+            if (octet != 0xFF) return false;
+        }
+        return true;
+    }
 
     constexpr bool operator==(const MacAddress&) const = default;
 

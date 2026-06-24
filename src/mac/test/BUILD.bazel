@@ -10,3 +10,79 @@ cc_test(
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )
+
+cc_test(
+    name = "crc32_test",
+    srcs = ["crc32_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:crc32",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
+    name = "ethernet_frame_test",
+    srcs = ["ethernet_frame_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:ethernet_frame",
+        "//src/mac:mac_address",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
+    name = "frame_builder_test",
+    srcs = ["frame_builder_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:crc32",
+        "//src/mac:ethernet_frame",
+        "//src/mac:frame_builder",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
+    name = "frame_filter_test",
+    srcs = ["frame_filter_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:frame_filter",
+        "//src/mac:mac_address",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
+    name = "frame_parser_test",
+    srcs = ["frame_parser_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:ethernet_frame",
+        "//src/mac:frame_builder",
+        "//src/mac:frame_filter",
+        "//src/mac:frame_parser",
+        "//src/mac:mac_address",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
+    name = "loopback_hack_test",
+    srcs = ["loopback_hack_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:ethernet_frame",
+        "//src/mac:loopback_hack",
+        "//src/mac:mac_address",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)

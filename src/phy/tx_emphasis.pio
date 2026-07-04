@@ -1,0 +1,26 @@
+; SPDX-License-Identifier: MIT
+; Copyright (c) 2026 Martino Pilia
+;
+; EMPHASIS state machine: drives the TXE amplitude-select pin from the CPU
+; annotation stream (one bit per data bit: the leading-half emphasis, packed
+; LSB-first). TXE high = full amplitude, low = reduced tail. The trailing half of
+; every bit is hard-coded full.
+;
+; 120 MHz clock, 12 cycles/bit, phase-matched to the LEVEL SM. The LEVEL SM spends
+; its first 2 cycles per bit on out/jmp (pins holding the previous trailing half),
+; then drives the leading half for cycles [2,8) and the trailing half for [8,12).
+; This SM mirrors that phase so the reduced leading-half window lines up:
+;   set[1] : full for cycles [0,2)  (trailing-half spillover; always full)
+;   out[5] : leading-half emphasis for cycles [2,8)
+;   set[3] : full for cycles [8,12) (trailing half)
+; Both SMs are started with their TX FIFOs pre-filled and enabled in sync so the
+; phase holds from the first bit; the alignment is confirmed on-target by the
+; DBG_PADOUT self-test.
+
+.program tx_emphasis
+
+.wrap_target
+    set pins, 1 [1]          ; full  (cycles [0,2))
+    out pins, 1 [5]          ; leading-half emphasis (autopull, LSB-first)  [2,8)
+    set pins, 1 [3]          ; full  (cycles [8,12))
+.wrap

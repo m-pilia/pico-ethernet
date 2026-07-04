@@ -6,6 +6,7 @@ cc_binary(
     linkopts = ["-Wl,--gc-sections"],
     deps = [
         "//src/mac:mac_address",
+        "//src/phy:phy",
         "//src/usb:cdc_ecm_device",
         "//src/usb:usb_descriptors",
         "//src/util:led_heartbeat",

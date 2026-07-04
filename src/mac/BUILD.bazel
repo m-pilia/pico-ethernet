@@ -52,14 +52,3 @@ cc_library(
         ":frame_filter",
     ],
 )
-
-# TEMPORARY: forge a reply by swapping src/dest. Remove in Phase 3.
-cc_library(
-    name = "loopback_hack",
-    hdrs = ["loopback_hack.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":ethernet_frame",
-        ":mac_address",
-    ],
-)

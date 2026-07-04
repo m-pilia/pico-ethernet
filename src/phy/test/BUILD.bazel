@@ -1,0 +1,53 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+
+cc_library(
+    name = "tx_reference",
+    testonly = True,
+    srcs = ["tx_reference.cpp"],
+    hdrs = ["tx_reference.h"],
+    visibility = ["//src/phy:__subpackages__"],
+    deps = ["//src/phy:tx_emphasis"],
+)
+
+cc_test(
+    name = "tx_emphasis_test",
+    srcs = ["tx_emphasis_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        ":tx_reference",
+        "//src/phy:tx_emphasis",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
+    name = "link_pulse_test",
+    srcs = ["link_pulse_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/phy:link_pulse",
+        "//src/phy:phy_timing",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_binary(
+    name = "tx_pio_selftest",
+    testonly = True,
+    srcs = ["tx_pio_selftest.cpp"],
+    linkopts = ["-Wl,--gc-sections"],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
+    deps = [
+        ":tx_reference",
+        "//src/phy:phy_timing",
+        "//src/phy:tx_emphasis",
+        "//src/phy:tx_emphasis_pio",
+        "//src/phy:tx_level_pio",
+        "//src/util:led_heartbeat",
+        "@pico-sdk//src/rp2_common/hardware_clocks",
+        "@pico-sdk//src/rp2_common/hardware_pio",
+        "@pico-sdk//src/rp2_common/pico_stdlib",
+    ],
+)

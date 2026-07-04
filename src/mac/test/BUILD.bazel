@@ -73,16 +73,3 @@ cc_test(
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )
-
-cc_test(
-    name = "loopback_hack_test",
-    srcs = ["loopback_hack_test.cpp"],
-    deps = [
-        "@googletest//:gtest",
-        "@googletest//:gtest_main",
-        "//src/mac:ethernet_frame",
-        "//src/mac:loopback_hack",
-        "//src/mac:mac_address",
-    ],
-    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
-)

@@ -1,0 +1,55 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@pico-sdk//bazel:defs.bzl", "pico_generate_pio_header")
+
+cc_library(
+    name = "phy_timing",
+    hdrs = ["phy_timing.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "tx_emphasis",
+    srcs = ["tx_emphasis.cpp"],
+    hdrs = ["tx_emphasis.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "link_pulse",
+    hdrs = ["link_pulse.h"],
+    visibility = ["//visibility:public"],
+    deps = [":phy_timing"],
+)
+
+pico_generate_pio_header(
+    name = "tx_level_pio",
+    srcs = ["tx_level.pio"],
+    visibility = ["//src/phy:__subpackages__"],
+)
+
+pico_generate_pio_header(
+    name = "tx_emphasis_pio",
+    srcs = ["tx_emphasis.pio"],
+    visibility = ["//src/phy:__subpackages__"],
+)
+
+cc_library(
+    name = "phy",
+    srcs = ["phy.cpp"],
+    hdrs = ["phy.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":link_pulse",
+        ":phy_timing",
+        ":tx_emphasis",
+        ":tx_emphasis_pio",
+        ":tx_level_pio",
+        "//src/mac:ethernet_frame",
+        "@pico-sdk//src/rp2_common/hardware_clocks",
+        "@pico-sdk//src/rp2_common/hardware_dma",
+        "@pico-sdk//src/rp2_common/hardware_gpio",
+        "@pico-sdk//src/rp2_common/hardware_pio",
+        "@pico-sdk//src/rp2_common/pico_stdlib",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
+)

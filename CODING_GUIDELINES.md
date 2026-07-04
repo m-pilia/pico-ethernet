@@ -162,6 +162,30 @@ Exceptions: `int main()` is mandated by the language, and a C library's API
 boundary — mirror the library's signature there, but keep your own variables
 fixed-width and `std::`-qualified.
 
+## Increment and Decrement
+
+Use the **prefix** form (`++i`, `--i`) exclusively; the **postfix** form
+(`i++`, `i--`) is not allowed.
+
+| Rule | Rationale |
+|------|-----------|
+| **Always `++i` / `--i`, never `i++` / `i--`** | Postfix conceptually yields a copy of the old value before modifying; prefix carries no such implication and states the intent (increment/decrement) without a discarded temporary. The codebase uses prefix uniformly, including where the result is unused. |
+
+This applies everywhere, including loop updates (`for (...; ++i)`) and array
+indexing: write `arr[pos] = x; ++pos;` (or an explicit offset such as
+`arr[pos + 1]`) instead of `arr[pos++] = x;`.
+
+```cpp
+// GOOD
+for (std::size_t i{0}; i < n; ++i) { ... }
+buf[pos] = value;
+++pos;
+
+// BAD
+for (std::size_t i{0}; i < n; i++) { ... }  // postfix loop update
+buf[pos++] = value;                          // postfix in index
+```
+
 ## Compiler Configuration
 
 **Required Flags for Embedded Target:**

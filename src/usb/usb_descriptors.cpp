@@ -115,7 +115,8 @@ const std::uint16_t* tud_descriptor_string_cb(std::uint8_t index, std::uint16_t 
             tud_network_mac_address, pico_ethernet::MacAddress::LENGTH)};
         const auto hex = mac.to_ecm_string();
         for (char c : hex) {
-            desc_str[1 + chr_count++] = static_cast<std::uint16_t>(c);
+            desc_str[1 + chr_count] = static_cast<std::uint16_t>(c);
+            ++chr_count;
         }
     } else {
         const std::size_t arr_index{static_cast<std::size_t>(index - STRID_MANUFACTURER)};

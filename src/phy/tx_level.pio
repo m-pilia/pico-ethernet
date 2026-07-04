@@ -1,0 +1,33 @@
+; SPDX-License-Identifier: MIT
+; Copyright (c) 2026 Martino Pilia
+;
+; LEVEL state machine: 10BASE-T Manchester polarity on the differential pair
+; {TXP, TXN} from the raw wire-frame bits. SET pin group = {TXP, TXN} with TXP as
+; the low bit; +Vdiff (Manchester H) = 0b01, -Vdiff (L) = 0b10, idle = 0b00.
+; Manchester: bit 1 = L then H; bit 0 = H then L. Raw frame bytes are shifted out
+; LSB-first (IEEE 802.3) via autopull.
+;
+; 120 MHz clock, 12 cycles/bit, 6 cycles/half-bit. The per-arm delays are chosen
+; so both arms total exactly 12 cycles with a 6/6 half-bit split, absorbing the
+; out/jmp loop overhead into the trailing half:
+;   bit=1 arm: out+jmp(2) + set[5](6) + set[2](3) + jmp(1)      = 12
+;   bit=0 arm: out+jmp(2) + set[5](6) + set[3](4)               = 12
+; giving first-half dwell 6 and trailing-half dwell 6 (the trailing set's dwell
+; includes the following out/jmp cycles, during which the pins hold that level).
+; The exact split is confirmed and trimmed on-target by the DBG_PADOUT self-test
+; and the scope.
+
+.program tx_level
+
+.wrap_target
+loop:
+    out x, 1                 ; next data bit -> X (autopull, LSB-first)
+    jmp !x, bit0
+    ; bit = 1 : L (-Vdiff) then H (+Vdiff)
+    set pins, 0b10 [5]       ; leading half  -V   (6 cyc)
+    set pins, 0b01 [2]       ; trailing half +V   (3 cyc + 3 overhead = 6)
+    jmp loop
+bit0:                        ; bit = 0 : H (+Vdiff) then L (-Vdiff)
+    set pins, 0b01 [5]       ; leading half  +V   (6 cyc)
+    set pins, 0b10 [3]       ; trailing half -V   (4 cyc + 2 overhead = 6)
+.wrap

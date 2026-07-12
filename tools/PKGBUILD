@@ -1,0 +1,16 @@
+# Maintainer: Martino Pilia <martino.pilia@proton.me>
+pkgname=pico-ethernet-udev
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="udev rule granting non-root USB access to the Pico 2 Ethernet NIC (1209:0001)"
+arch=('any')
+url="https://github.com/m-pilia/pico_ethernet"
+license=('MIT')
+
+package() {
+	install -Dm644 /dev/stdin \
+		"${pkgdir}/usr/lib/udev/rules.d/70-pico-ethernet.rules" <<-EOF
+		# Pico 2 Ethernet NIC (VID:PID 1209:0001) — non-root userspace USB access.
+		SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="0001", TAG+="uaccess"
+	EOF
+}

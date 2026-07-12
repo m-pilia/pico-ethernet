@@ -15,6 +15,20 @@ cc_library(
 )
 
 cc_library(
+    name = "phy_stats",
+    hdrs = ["phy_stats.h"],
+    visibility = ["//visibility:public"],
+    deps = ["//src/mac:ethernet_frame"],
+)
+
+cc_library(
+    name = "rx_frame_align",
+    hdrs = ["rx_frame_align.h"],
+    visibility = ["//visibility:public"],
+    deps = ["//src/mac:ethernet_frame"],
+)
+
+cc_library(
     name = "link_pulse",
     hdrs = ["link_pulse.h"],
     visibility = ["//visibility:public"],
@@ -33,6 +47,12 @@ pico_generate_pio_header(
     visibility = ["//src/phy:__subpackages__"],
 )
 
+pico_generate_pio_header(
+    name = "rx_pio",
+    srcs = ["rx.pio"],
+    visibility = ["//src/phy:__subpackages__"],
+)
+
 cc_library(
     name = "phy",
     srcs = ["phy.cpp"],
@@ -41,6 +61,8 @@ cc_library(
     deps = [
         ":link_pulse",
         ":phy_timing",
+        ":rx_frame_align",
+        ":rx_pio",
         ":tx_emphasis",
         ":tx_emphasis_pio",
         ":tx_level_pio",

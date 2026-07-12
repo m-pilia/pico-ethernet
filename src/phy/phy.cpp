@@ -5,13 +5,16 @@
 
 #include <algorithm>
 #include <cassert>
+#include <optional>
 
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
 
 #include "src/phy/phy_timing.h"
+#include "src/phy/rx_frame_align.h"
 #include "src/phy/tx_emphasis.h"
 
+#include "rx.pio.h"
 #include "tx_emphasis.pio.h"
 #include "tx_level.pio.h"
 
@@ -20,35 +23,43 @@ namespace pico_ethernet {
 Phy::Phy(const Pins& pins)
     : pins_{pins} {
     // TXP/TXN must be adjacent so the LEVEL SM can drive them as one 2-pin SET
-    // group.
+    // group; RXD/RXC must be adjacent so the RX SM can gate on RXC via IN base + 1.
     assert(pins_.txn == pins_.txp + 1);
+    assert(pins_.rxc == pins_.rxd + 1);
 }
 
 bool Phy::initialize() {
     set_sys_clock_khz(SYS_CLOCK_HZ / 1000, true);
 
-    if (!pio_can_add_program(pio_, &tx_level_program) || !pio_can_add_program(pio_, &tx_emphasis_program)) {
+    if (!pio_can_add_program(pio_, &tx_level_program) || !pio_can_add_program(pio_, &tx_emphasis_program) ||
+        !pio_can_add_program(pio_, &rx_manchester_program)) {
         return false;
     }
     offset_level_ = static_cast<std::uint32_t>(pio_add_program(pio_, &tx_level_program));
     offset_emphasis_ = static_cast<std::uint32_t>(pio_add_program(pio_, &tx_emphasis_program));
+    offset_rx_ = static_cast<std::uint32_t>(pio_add_program(pio_, &rx_manchester_program));
 
     const int sml{pio_claim_unused_sm(pio_, false)};
     const int sme{pio_claim_unused_sm(pio_, false)};
-    if (sml < 0 || sme < 0) {
+    const int smr{pio_claim_unused_sm(pio_, false)};
+    if (sml < 0 || sme < 0 || smr < 0) {
         return false;
     }
     sm_level_ = static_cast<std::uint32_t>(sml);
     sm_emphasis_ = static_cast<std::uint32_t>(sme);
+    sm_rx_ = static_cast<std::uint32_t>(smr);
 
     dma_level_ = dma_claim_unused_channel(false);
     dma_emphasis_ = dma_claim_unused_channel(false);
-    if (dma_level_ < 0 || dma_emphasis_ < 0) {
+    dma_rx_ = dma_claim_unused_channel(false);
+    if (dma_level_ < 0 || dma_emphasis_ < 0 || dma_rx_ < 0) {
         return false;
     }
 
     configure_state_machines();
+    configure_rx();
     force_idle();
+    arm_rx();
 
     nlp_alarm_ = add_alarm_in_ms(nlp_.next_interval_ms(), &Phy::nlp_alarm_cb, this, true);
     return true;
@@ -85,6 +96,76 @@ void Phy::configure_state_machines() {
     sm_config_set_out_shift(&emphasis_cfg_, true, true, 8);
     sm_config_set_clkdiv(&emphasis_cfg_, 1.0f);
     pio_sm_init(pio_, sm_emphasis_, offset_emphasis_, &emphasis_cfg_);
+}
+
+void Phy::configure_rx() {
+    // The comparators drive RXD/RXC externally. gpio_init de-isolates the pads
+    // (RP2350 resets pads isolated, which gpio_set_input_enabled does not clear)
+    // and enables their inputs without driving them; PIO reads a pad's input
+    // independently of its function select, and gpio_get() (carrier polling) reads
+    // the same input via SIO.
+    gpio_init(pins_.rxd);
+    gpio_init(pins_.rxc);
+
+    rx_cfg_ = rx_manchester_program_get_default_config(offset_rx_);
+    sm_config_set_in_pins(&rx_cfg_, pins_.rxd);      // IN base = RXD; base + 1 = RXC
+    sm_config_set_jmp_pin(&rx_cfg_, pins_.rxd);      // jmp pin samples RXD
+    sm_config_set_in_shift(&rx_cfg_, true, true, 8); // shift right, autopush, one octet
+    sm_config_set_clkdiv(&rx_cfg_, 1.0f);            // 12 cycles/bit at 120 MHz
+    pio_sm_init(pio_, sm_rx_, offset_rx_, &rx_cfg_);
+}
+
+void Phy::arm_rx() {
+    pio_sm_set_enabled(pio_, sm_rx_, false);
+    pio_sm_clear_fifos(pio_, sm_rx_);
+    // Full reset: PC back to the carrier-gate at the program start and the ISR
+    // shift counter cleared, so the next frame's octets are byte-aligned.
+    pio_sm_init(pio_, sm_rx_, offset_rx_, &rx_cfg_);
+
+    dma_channel_config c{dma_channel_get_default_config(dma_rx_)};
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+    channel_config_set_read_increment(&c, false);
+    channel_config_set_write_increment(&c, true);
+    channel_config_set_dreq(&c, pio_get_dreq(pio_, sm_rx_, false));
+    dma_channel_configure(dma_rx_, &c, rx_words_.data(), &pio_->rxf[sm_rx_], rx_words_.size(), true);
+
+    pio_sm_set_enabled(pio_, sm_rx_, true);
+    receiving_ = false;
+}
+
+Phy::RxFrame Phy::poll_rx() {
+    if (gpio_get(pins_.rxc)) {
+        receiving_ = true;
+        return {}; // carrier present: frame still in flight
+    }
+    if (!receiving_) {
+        return {}; // idle line
+    }
+
+    // Carrier dropped -> end of frame. The RX SM has stalled on the missing edges
+    // and DMA has drained every complete octet, so the remaining count is stable.
+    dma_channel_abort(dma_rx_);
+    const std::uint32_t remaining{dma_channel_hw_addr(dma_rx_)->transfer_count};
+    const std::size_t count{rx_words_.size() - remaining};
+
+    // The autopushed octet lands in the top byte of the 32-bit FIFO word
+    // (shift-right, 8-bit threshold), LSB-first within the byte.
+    for (std::size_t i{0}; i < count; ++i) {
+        rx_frame_[i] = static_cast<std::uint8_t>(rx_words_[i] >> 24);
+    }
+
+    arm_rx();
+
+    // The carrier gate started the decoder mid-preamble, so these octets are
+    // offset from the frame's byte boundaries by 0..7 bits; recover alignment from
+    // the SFD before the byte-oriented MAC parser sees them. No SFD means the
+    // carrier carried no decodable frame (idle noise or a partial capture).
+    const std::optional<std::size_t> aligned{
+        align_to_sfd(std::span<const std::uint8_t>(rx_frame_.data(), count), rx_aligned_)};
+    if (!aligned) {
+        return {.kind = RxFrame::Kind::Glitch, .wire = {}};
+    }
+    return {.kind = RxFrame::Kind::Frame, .wire = std::span<const std::uint8_t>(rx_aligned_.data(), *aligned)};
 }
 
 bool Phy::transmit(std::span<const std::uint8_t> wire_frame) {

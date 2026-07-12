@@ -15,6 +15,7 @@
 
 #include "src/mac/frame_filter.h"
 #include "src/mac/mac_address.h"
+#include "src/phy/phy_stats.h"
 
 namespace {
 
@@ -67,7 +68,8 @@ const tusb_desc_device_t desc_device = {
 const std::uint8_t desc_fs_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
     // itf, description str, MAC str, notif EP + size, data EP out/in + size,
-    // max segment size, number of multicast filters we support (wNumberMCFilters).
+    // max segment size, number of multicast filters we support (wNumberMCFilters),
+    // bmEthernetStatistics bitmap (which GetEthernetStatistic counters we answer).
     // D15 (perfect-filtering) is left clear: the value is a plain count, which the
     // host honors by programming the list; our exact matching is a valid refinement.
     TUD_CDC_ECM_DESCRIPTOR(
@@ -80,7 +82,8 @@ const std::uint8_t desc_fs_configuration[] = {
         EPNUM_NET_IN,
         CFG_TUD_ENDPOINT0_SIZE,
         CFG_TUD_NET_MTU,
-        pico_ethernet::FrameFilter::MAX_MULTICAST),
+        pico_ethernet::FrameFilter::MAX_MULTICAST,
+        pico_ethernet::ETHERNET_STATISTICS_BITMAP),
 };
 
 const char* const string_desc_arr[] = {

@@ -4,6 +4,17 @@ refresh_compile_commands(
     name = "refresh_compile_commands",
     targets = {
         "//src:pico_ethernet_firmware": "--config=rp2350",
+        "//src/phy/test:rx_pio_selftest": "--config=rp2350",
+        "//src/phy/test:tx_pio_selftest": "--config=rp2350",
+        "//src/mac/test:crc32_test": "",
+        "//src/mac/test:ethernet_frame_test": "",
+        "//src/mac/test:frame_builder_test": "",
+        "//src/mac/test:frame_filter_test": "",
+        "//src/mac/test:frame_parser_test": "",
         "//src/mac/test:mac_address_test": "",
+        "//src/phy/test:link_pulse_test": "",
+        "//src/phy/test:phy_stats_test": "",
+        "//src/phy/test:rx_frame_align_test": "",
+        "//src/phy/test:tx_emphasis_test": "",
     },
 )

@@ -1,0 +1,74 @@
+diff --git a/src/class/net/ecm_rndis_device.c b/src/class/net/ecm_rndis_device.c
+index 3008eee30..a1b2c3d40 100644
+--- a/src/class/net/ecm_rndis_device.c
++++ b/src/class/net/ecm_rndis_device.c
+@@ -94,6 +94,12 @@ TU_ATTR_WEAK void tud_network_set_multicast_filter_cb(const uint8_t *addresses, u
+   (void) count;
+ }
+
++TU_ATTR_WEAK bool tud_network_get_statistic_cb(uint16_t feature_selector, uint32_t *value) {
++  (void) feature_selector;
++  (void) value;
++  return false;
++}
++
+ void tud_network_recv_renew(void) {
+   usbd_edpt_xfer(0, _netd_itf.ep_out, _netd_epbuf.rx, NETD_PACKET_SIZE, false);
+ }
+@@ -312,7 +318,18 @@ bool netd_control_xfer_cb (uint8_t rhport, uint8_t stage, tusb_control_request_t
+             // Receive the multicast address list (count * 6 bytes) in the data stage.
+             TU_ASSERT(request->wLength <= NETD_CONTROL_SIZE);
+             tud_control_xfer(rhport, request, _netd_epbuf.ctrl, request->wLength);
+-          }
++          } else if (0x44 /* GET_ETHERNET_STATISTIC */ == request->bRequest) {
++            uint32_t stat_value = 0;
++            if (tud_network_get_statistic_cb((uint16_t) request->wValue, &stat_value)) {
++              _netd_epbuf.ctrl[0] = (uint8_t) (stat_value);
++              _netd_epbuf.ctrl[1] = (uint8_t) (stat_value >> 8);
++              _netd_epbuf.ctrl[2] = (uint8_t) (stat_value >> 16);
++              _netd_epbuf.ctrl[3] = (uint8_t) (stat_value >> 24);
++              tud_control_xfer(rhport, request, _netd_epbuf.ctrl, 4);
++            } else {
++              return false;
++            }
++          }
+         } else {
+           if (request->bmRequestType_bit.direction == TUSB_DIR_IN) {
+             rndis_generic_msg_t* rndis_msg = (rndis_generic_msg_t*)((void*)_netd_epbuf.ctrl);
+diff --git a/src/class/net/net_device.h b/src/class/net/net_device.h
+index 5892fa5c4..b1c2d3e40 100644
+--- a/src/class/net/net_device.h
++++ b/src/class/net/net_device.h
+@@ -109,6 +109,10 @@ void tud_network_set_packet_filter_cb(uint16_t packet_filter);
+ // Optional callback: host-provided multicast address list (count 6-byte addresses)
+ void tud_network_set_multicast_filter_cb(const uint8_t *addresses, uint16_t count);
+
++// Optional callback: return true and set *value for a supported GetEthernetStatistic
++// feature selector; return false to stall the request.
++bool tud_network_get_statistic_cb(uint16_t feature_selector, uint32_t *value);
++
+ // Optional callback: called during netd_init() to get the initial link state.
+ // Override to return the actual physical link state instead of the compile-time default.
+ bool tud_network_default_link_state_cb(void);
+diff --git a/src/device/usbd.h b/src/device/usbd.h
+index dcb320b9c..e2f3a4b50 100644
+--- a/src/device/usbd.h
++++ b/src/device/usbd.h
+@@ -934,7 +934,7 @@
+
+ // CDC-ECM Descriptor Template
+ // Interface number, description string index, MAC address string index, EP notification address and size, EP data address (out, in), and size, max segment size.
+-#define TUD_CDC_ECM_DESCRIPTOR(_itfnum, _desc_stridx, _mac_stridx, _ep_notif, _ep_notif_size, _epout, _epin, _epsize, _maxsegmentsize, _mc_filters) \
++#define TUD_CDC_ECM_DESCRIPTOR(_itfnum, _desc_stridx, _mac_stridx, _ep_notif, _ep_notif_size, _epout, _epin, _epsize, _maxsegmentsize, _mc_filters, _stats) \
+   /* Interface Association */\
+   8, TUSB_DESC_INTERFACE_ASSOCIATION, _itfnum, 2, TUSB_CLASS_CDC, CDC_COMM_SUBCLASS_ETHERNET_CONTROL_MODEL, 0, 0,\
+   /* CDC Control Interface */\
+@@ -944,7 +944,7 @@
+   /* CDC-ECM Union */\
+   5, TUSB_DESC_CS_INTERFACE, CDC_FUNC_DESC_UNION, _itfnum, (uint8_t)((_itfnum) + 1),\
+   /* CDC-ECM Functional Descriptor */\
+-  13, TUSB_DESC_CS_INTERFACE, CDC_FUNC_DESC_ETHERNET_NETWORKING, _mac_stridx, 0, 0, 0, 0, U16_TO_U8S_LE(_maxsegmentsize), U16_TO_U8S_LE(_mc_filters), 0,\
++  13, TUSB_DESC_CS_INTERFACE, CDC_FUNC_DESC_ETHERNET_NETWORKING, _mac_stridx, U32_TO_U8S_LE(_stats), U16_TO_U8S_LE(_maxsegmentsize), U16_TO_U8S_LE(_mc_filters), 0,\
+   /* Endpoint Notification */\
+   7, TUSB_DESC_ENDPOINT, _ep_notif, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(_ep_notif_size), 1,\
+   /* CDC Data Interface (default inactive) */\

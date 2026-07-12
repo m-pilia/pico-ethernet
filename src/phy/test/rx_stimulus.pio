@@ -1,0 +1,14 @@
+; SPDX-License-Identifier: MIT
+; Copyright (c) 2026 Martino Pilia
+;
+; Test-only stimulus: replays a precomputed single-ended RXD waveform to drive the
+; RX decoder on-chip, one bit per 50 ns half-bit (6 cycles at 120 MHz, matching
+; the RX SM's half-bit). Half-bit levels are pulled LSB-first from the FIFO and
+; driven onto the RXD injection pin; a companion GPIO holds RXC (carrier) so the
+; decoder is gated exactly as on the wire.
+
+.program rx_stimulus
+
+.wrap_target
+    out pins, 1 [5]
+.wrap

@@ -10,6 +10,7 @@
 #include <span>
 
 #include "src/mac/frame_builder.h"
+#include "src/mac/frame_parser.h"
 
 #include "tusb.h"
 
@@ -46,6 +47,36 @@ void CdcEcmDevice::initialize() {
 void CdcEcmDevice::task() {
     tud_task();
     phy_.service();
+
+    const Phy::RxFrame received{phy_.poll_rx()};
+    switch (received.kind) {
+        case Phy::RxFrame::Kind::Frame:
+            deliver_to_host(received.wire);
+            break;
+        case Phy::RxFrame::Kind::Glitch:
+            ++rx_stats_.carrier_glitch;
+            break;
+        case Phy::RxFrame::Kind::None:
+            break;
+    }
+}
+
+void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> wire_frame) {
+    const auto parsed = parse_frame(wire_frame, filter_);
+    if (!parsed) {
+        rx_stats_.record_error(parsed.error());
+        return;
+    }
+
+    // tud_network_xmit invokes on_frame_transmit synchronously, so aliasing the
+    // PHY's receive buffer through pending_host_frame_ is safe for this call.
+    if (!tud_network_can_xmit(static_cast<std::uint16_t>(parsed->size()))) {
+        return;
+    }
+    pending_host_frame_ = *parsed;
+    tud_network_xmit(this, static_cast<std::uint16_t>(parsed->size()));
+    pending_host_frame_ = {};
+    ++rx_stats_.delivered;
 }
 
 void CdcEcmDevice::set_link_up(bool up) {
@@ -72,9 +103,11 @@ bool CdcEcmDevice::on_frame_received(std::span<const std::uint8_t> host_frame) {
 }
 
 std::uint16_t CdcEcmDevice::on_frame_transmit(std::span<std::uint8_t> dst) {
-    // No wire-to-host receive path yet, so nothing is sent to the host.
-    (void)dst;
-    return 0;
+    if (pending_host_frame_.empty() || pending_host_frame_.size() > dst.size()) {
+        return 0;
+    }
+    std::ranges::copy(pending_host_frame_, dst.begin());
+    return static_cast<std::uint16_t>(pending_host_frame_.size());
 }
 
 void CdcEcmDevice::on_multicast_filter(std::span<const std::uint8_t> addresses, std::uint16_t count) {
@@ -89,6 +122,15 @@ void CdcEcmDevice::on_multicast_filter(std::span<const std::uint8_t> addresses, 
 void CdcEcmDevice::on_network_init() {
     // The host reprograms the filter on bring-up; start from accept-nothing.
     filter_.set_packet_filter(0);
+}
+
+bool CdcEcmDevice::on_get_statistic(std::uint16_t selector, std::uint32_t& value) const {
+    const auto result = ethernet_statistic(selector, stats_, rx_stats_);
+    if (!result) {
+        return false;
+    }
+    value = *result;
+    return true;
 }
 
 } // namespace pico_ethernet
@@ -130,6 +172,13 @@ void tud_network_set_multicast_filter_cb(const std::uint8_t* addresses, std::uin
         pico_ethernet::g_instance->on_multicast_filter(
             std::span(addresses, static_cast<std::size_t>(count) * pico_ethernet::MacAddress::LENGTH), count);
     }
+}
+
+bool tud_network_get_statistic_cb(std::uint16_t feature_selector, std::uint32_t* value) {
+    if (pico_ethernet::g_instance == nullptr) {
+        return false;
+    }
+    return pico_ethernet::g_instance->on_get_statistic(feature_selector, *value);
 }
 
 // The combined ECM/RNDIS driver references this RNDIS handler, but we never

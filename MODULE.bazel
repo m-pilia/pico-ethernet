@@ -26,8 +26,9 @@ git_override(
 # upstream TinyUSB that provides tud_network_link_state() and
 # tud_network_set_packet_filter_cb() natively, and point PICO_TINYUSB_LIB at it
 # (see .bazelrc). This replaces the former keep-in-sync pin plus local
-# link-state patch with stock upstream TinyUSB. The one remaining local diff
-# adds a SetEthernetMulticastFilters callback the ECM driver does not yet expose.
+# link-state patch with stock upstream TinyUSB. The remaining local diffs add a
+# SetEthernetMulticastFilters callback and a GetEthernetStatistic handler the ECM
+# driver does not yet expose.
 new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 
 new_git_repository(
@@ -35,6 +36,9 @@ new_git_repository(
     build_file = "//patches:tinyusb.BUILD",
     commit = "94d5e74f63d49131d733cc847f1aa71c558101ac",  # upstream master: native link-state + packet-filter callbacks
     patch_args = ["-p1"],
-    patches = ["//patches:tinyusb_ecm_multicast_filter.patch"],
+    patches = [
+        "//patches:tinyusb_ecm_multicast_filter.patch",
+        "//patches:tinyusb_ecm_statistics.patch",
+    ],
     remote = "https://github.com/hathach/tinyusb.git",
 )

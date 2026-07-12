@@ -14,10 +14,10 @@ int main() {
 
     // Bring up the PHY first: it sets the 120 MHz system clock the PIO timing
     // depends on, before the USB stack starts.
-    pico_ethernet::Phy phy{};
+    static pico_ethernet::Phy phy{};
     const bool phy_ok{phy.initialize()};
 
-    pico_ethernet::CdcEcmDevice device{DEVICE_MAC, phy};
+    static pico_ethernet::CdcEcmDevice device{DEVICE_MAC, phy};
     device.initialize();
 
     pico_ethernet::LedHeartbeat led{LED_PIN};

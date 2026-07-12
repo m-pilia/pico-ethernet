@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace pico_ethernet {
@@ -47,6 +48,29 @@ inline constexpr std::uint32_t CRC32_RESIDUAL{0x2144DF1Cu};
         crc = detail::CRC32_TABLE[(crc ^ byte) & 0xFFu] ^ (crc >> 8);
     }
     return crc ^ 0xFFFFFFFFu;
+}
+
+// The running (pre-final-inversion) CRC reaches this exactly when the bytes
+// consumed so far form a frame followed by its valid FCS -- i.e. it is the
+// CRC32_RESIDUAL check moved before the final inversion, so it can be applied to a
+// streaming CRC without recomputing per length.
+inline constexpr std::uint32_t CRC32_RESIDUAL_RAW{CRC32_RESIDUAL ^ 0xFFFFFFFFu};
+
+// Length of the shortest prefix of `data` (at least `min_len` bytes) whose last
+// four bytes are a valid FCS for the bytes before them, or nullopt if none. The
+// carrier-gated receiver captures past the FCS into trailing line noise, so this
+// recovers the true frame boundary in one O(n) pass instead of assuming the whole
+// capture is the frame.
+[[nodiscard]] constexpr std::optional<std::size_t>
+fcs_frame_length(std::span<const std::uint8_t> data, std::size_t min_len) {
+    std::uint32_t crc{0xFFFFFFFFu};
+    for (std::size_t i{0}; i < data.size(); ++i) {
+        crc = detail::CRC32_TABLE[(crc ^ data[i]) & 0xFFu] ^ (crc >> 8);
+        if (i + 1 >= min_len && crc == CRC32_RESIDUAL_RAW) {
+            return i + 1;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace pico_ethernet

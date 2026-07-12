@@ -1,3 +1,7 @@
 /bazel-*
 /compile_commands.json
 /.cache/
+/temp/
+__pycache__
+/tools/pkg
+.clangd

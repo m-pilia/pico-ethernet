@@ -1,0 +1,47 @@
+; SPDX-License-Identifier: MIT
+; Copyright (c) 2026 Martino Pilia
+;
+; RX state machine: recovers the 10BASE-T Manchester bit stream sliced by the
+; comparator front-end back into wire-frame octets. IN base = RXD (data slicer,
+; GP8); IN base + 1 = RXC (carrier detect, GP9); JMP pin = RXD. Bytes are shifted
+; in LSB-first (IEEE 802.3) and autopushed one octet at a time, mirroring the
+; LSB-first octet shift of the LEVEL transmit SM.
+;
+; Manchester convention (matching tx_level.pio): data bit 1 = -V then +V, data
+; bit 0 = +V then -V. RXD is the sign of the differential, so RXD is low in a
+; -V half-bit and high in a +V half-bit. Therefore the data bit equals the
+; complement of the *first* half-bit level: first half low -> bit 1, first half
+; high -> bit 0. There is always a mid-bit transition, whose direction is set by
+; the data bit, so it is used to resync every bit.
+;
+; Timing (120 MHz, 12 cycles/bit, 6 cycles/half-bit, /1 clock, phase-matched to
+; the transmit SMs). Each iteration samples the current bit's first-half level to
+; pick the mid-bit edge direction, blocks on that edge to resync, records the bit,
+; then advances so the loop is exactly 12 cycles: the SM reaches the next resync
+; `wait` two cycles before the edge appears, so the `wait` blocks and re-locks
+; every bit (no free-running drift), and the next sample lands at the centre of
+; the following bit's first half. Every offset is anchored to the resync edge, so
+; the input-synchronizer and comparator delays cancel. The `[4]` advance is
+; trimmed on-target against the automated RX self-test.
+;
+; The SM is gated on RXC so idle-line noise is ignored until a real carrier
+; appears; end-of-frame handling (carrier drop) and per-frame realignment are
+; driven from the CPU, which restarts the SM during the interframe gap.
+
+.program rx_manchester
+
+.wrap_target
+    wait 1 pin 1             ; carrier present (RXC high) -> frame start
+decode:
+    jmp pin, first_high      ; sample the first-half level of the current bit
+    ; first half low -> data bit 1 (-V then +V)
+    wait 1 pin 0             ; resync on the rising mid-bit edge
+    set y, 1
+    jmp emit
+first_high:                  ; first half high -> data bit 0 (+V then -V)
+    wait 0 pin 0             ; resync on the falling mid-bit edge
+    set y, 0
+    nop                      ; balance the taken/!taken jmp so both branches align
+emit:
+    in y, 1 [4]              ; shift the data bit in (autopush at 8); advance to next first half
+    jmp decode

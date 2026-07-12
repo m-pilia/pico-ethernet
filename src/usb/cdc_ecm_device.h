@@ -10,6 +10,7 @@
 #include "src/mac/frame_filter.h"
 #include "src/mac/mac_address.h"
 #include "src/phy/phy.h"
+#include "src/phy/phy_stats.h"
 
 namespace pico_ethernet {
 
@@ -21,13 +22,6 @@ namespace pico_ethernet {
 // plumbing (descriptors, endpoints, notifications) lives in TinyUSB.
 class CdcEcmDevice {
   public:
-    // TX outcome counters for on-device verification.
-    struct TxStats {
-        std::uint32_t accepted{0};     // frames handed to the PHY
-        std::uint32_t build_failed{0}; // host frame too long to frame
-        std::uint32_t dropped_busy{0}; // PHY still transmitting a prior frame
-    };
-
     CdcEcmDevice(const MacAddress& mac_address, Phy& phy);
 
     // Publishes the MAC to TinyUSB, starts the USB device stack, registers this
@@ -41,6 +35,7 @@ class CdcEcmDevice {
     bool link_up() const { return link_up_; }
     const MacAddress& mac_address() const { return mac_address_; }
     const TxStats& tx_stats() const { return stats_; }
+    const RxStats& rx_stats() const { return rx_stats_; }
 
     // Handlers invoked by the extern "C" TinyUSB network callbacks.
     bool on_frame_received(std::span<const std::uint8_t> host_frame);
@@ -49,12 +44,23 @@ class CdcEcmDevice {
     void on_multicast_filter(std::span<const std::uint8_t> addresses, std::uint16_t count);
     void on_network_init();
 
+    // Answers a CDC-ECM GetEthernetStatistic request: resolves the feature
+    // selector against the TX and PHY RX counters. False for unsupported
+    // selectors so the control transfer is stalled.
+    [[nodiscard]] bool on_get_statistic(std::uint16_t selector, std::uint32_t& value) const;
+
   private:
+    // Runs a recovered wire frame through the MAC parse/filter and, on success,
+    // hands the host-facing frame to the CDC-ECM transmit path.
+    void deliver_to_host(std::span<const std::uint8_t> wire_frame);
+
     MacAddress mac_address_;
     Phy& phy_;
     bool link_up_{false};
     FrameFilter filter_;
     TxStats stats_{};
+    RxStats rx_stats_{};
+    std::span<const std::uint8_t> pending_host_frame_{};
 };
 
 } // namespace pico_ethernet

@@ -105,6 +105,20 @@ TEST(FrameParserTest, RejectsGiant) {
     EXPECT_EQ(parsed.error(), FrameError::Giant);
 }
 
+TEST(FrameParserTest, TrimsTrailingGarbageAfterFcs) {
+    const auto host = make_host_frame(OUR_MAC, 100);
+    const auto built = build_frame(host);
+    ASSERT_TRUE(built.has_value());
+
+    // Emulate the carrier-gated decoder capturing past the FCS into trailing noise.
+    std::vector<std::uint8_t> wire(built->view().begin(), built->view().end());
+    wire.insert(wire.end(), {0xDE, 0xAD, 0xBE, 0xEF, 0x55, 0x00});
+
+    const auto parsed = parse_frame(wire, promiscuous());
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_TRUE(std::ranges::equal(*parsed, host));
+}
+
 TEST(FrameParserTest, RejectsCorruptedFcs) {
     const auto host = make_host_frame(OUR_MAC, 100);
     auto built = build_frame(host);

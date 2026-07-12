@@ -20,6 +20,7 @@ cc_library(
     deps = [
         "//src/mac:frame_filter",
         "//src/mac:mac_address",
+        "//src/phy:phy_stats",
         "@pico-sdk//bazel/config:PICO_TINYUSB_LIB",
         "@pico-sdk//src/rp2_common/tinyusb:tinyusb_port",
     ],
@@ -34,8 +35,10 @@ cc_library(
         "//src/mac:ethernet_frame",
         "//src/mac:frame_builder",
         "//src/mac:frame_filter",
+        "//src/mac:frame_parser",
         "//src/mac:mac_address",
         "//src/phy:phy",
+        "//src/phy:phy_stats",
         "@pico-sdk//bazel/config:PICO_TINYUSB_LIB",
         "@pico-sdk//src/rp2_common/tinyusb:tinyusb_port",
     ],

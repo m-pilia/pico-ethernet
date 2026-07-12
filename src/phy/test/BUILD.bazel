@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@pico-sdk//bazel:defs.bzl", "pico_generate_pio_header")
 
 cc_library(
     name = "tx_reference",
@@ -22,6 +23,31 @@ cc_test(
 )
 
 cc_test(
+    name = "phy_stats_test",
+    srcs = ["phy_stats_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:ethernet_frame",
+        "//src/phy:phy_stats",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
+    name = "rx_frame_align_test",
+    srcs = ["rx_frame_align_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/mac:ethernet_frame",
+        "//src/mac:frame_builder",
+        "//src/phy:rx_frame_align",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
     name = "link_pulse_test",
     srcs = ["link_pulse_test.cpp"],
     deps = [
@@ -31,6 +57,38 @@ cc_test(
         "//src/phy:phy_timing",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+pico_generate_pio_header(
+    name = "rx_stimulus_pio",
+    srcs = ["rx_stimulus.pio"],
+)
+
+cc_binary(
+    name = "rx_pio_selftest",
+    testonly = True,
+    srcs = ["rx_pio_selftest.cpp"],
+    linkopts = ["-Wl,--gc-sections"],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
+    deps = [
+        ":rx_stimulus_pio",
+        ":tx_reference",
+        "//src/mac:ethernet_frame",
+        "//src/mac:frame_builder",
+        "//src/mac:frame_filter",
+        "//src/mac:frame_parser",
+        "//src/mac:mac_address",
+        "//src/phy:phy_timing",
+        "//src/phy:rx_frame_align",
+        "//src/phy:rx_pio",
+        "//src/phy:tx_emphasis",
+        "//src/util:led_heartbeat",
+        "@pico-sdk//src/rp2_common/hardware_clocks",
+        "@pico-sdk//src/rp2_common/hardware_dma",
+        "@pico-sdk//src/rp2_common/hardware_gpio",
+        "@pico-sdk//src/rp2_common/hardware_pio",
+        "@pico-sdk//src/rp2_common/pico_stdlib",
+    ],
 )
 
 cc_binary(

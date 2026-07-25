@@ -1,20 +1,17 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
-# MAC address library (header-only; fully constexpr).
 cc_library(
     name = "mac_address",
     hdrs = ["mac_address.h"],
     visibility = ["//visibility:public"],
 )
 
-# Ethernet FCS (CRC-32) (header-only; fully constexpr).
 cc_library(
     name = "crc32",
     hdrs = ["crc32.h"],
     visibility = ["//visibility:public"],
 )
 
-# Ethernet frame layout: constants, wire-frame buffer, field accessors.
 cc_library(
     name = "ethernet_frame",
     hdrs = ["ethernet_frame.h"],
@@ -22,7 +19,6 @@ cc_library(
     deps = [":mac_address"],
 )
 
-# TX frame builder: host frame -> wire frame (pad, FCS, preamble/SFD).
 cc_library(
     name = "frame_builder",
     hdrs = ["frame_builder.h"],
@@ -33,22 +29,9 @@ cc_library(
     ],
 )
 
-# RX destination-address filter (CDC-ECM packet + multicast filters).
 cc_library(
     name = "frame_filter",
     hdrs = ["frame_filter.h"],
     visibility = ["//visibility:public"],
     deps = [":mac_address"],
-)
-
-# RX frame parser: wire frame -> host frame (strip, validate, filter).
-cc_library(
-    name = "frame_parser",
-    hdrs = ["frame_parser.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":crc32",
-        ":ethernet_frame",
-        ":frame_filter",
-    ],
 )

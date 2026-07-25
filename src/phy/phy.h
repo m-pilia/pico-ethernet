@@ -15,6 +15,7 @@
 
 #include "src/mac/ethernet_frame.h"
 #include "src/phy/link_pulse.h"
+#include "src/phy/rx_pio_config.h"
 
 namespace pico_ethernet {
 
@@ -37,16 +38,18 @@ class Phy {
     };
     static constexpr Pins DEFAULT_PINS{.txp = 2, .txn = 3, .txe = 4, .rxd = 8, .rxc = 9};
 
-    // Outcome of a receive poll. `wire` aliases an internal buffer valid until the
+    // Outcome of a receive poll. `frame` aliases an internal buffer valid until the
     // next poll_rx() call.
     struct RxFrame {
         enum class Kind : std::uint8_t {
             None,   // no completed reception this poll
-            Frame,  // a wire-frame candidate is ready in `wire`
-            Glitch, // carrier came and went without yielding any octet
+            Frame,  // a byte-aligned destination..FCS frame is ready in `frame`
+            Glitch, // carrier came and went without a decodable frame (no SFD)
+            Error,  // a frame was captured but rejected by the MAC checks (`error`)
         };
         Kind kind{Kind::None};
-        std::span<const std::uint8_t> wire{};
+        std::span<const std::uint8_t> frame{}; // destination..FCS when Kind::Frame
+        FrameError error{};                    // valid when Kind::Error
     };
 
     explicit Phy(const Pins& pins = DEFAULT_PINS);
@@ -109,13 +112,17 @@ class Phy {
     std::size_t tx_len_{0};
     bool active_{false};
 
-    // The RX SM autopushes one octet per 32-bit FIFO word; DMA lands them here and
-    // poll_rx() packs the recovered octets into rx_frame_. align_to_sfd() then
-    // re-aligns them into rx_aligned_ (the carrier gate starts the decoder
-    // mid-preamble, so rx_frame_'s byte boundaries are bit-offset) for the MAC.
-    std::array<std::uint32_t, WIRE_CAPACITY> rx_words_{};
+    // The RX SM autopushes four recovered octets per 32-bit FIFO word; DMA lands
+    // them densely here. poll_rx() reads the packed words directly (no intermediate
+    // byte copy) and recover_frame() writes the byte-aligned destination..FCS frame
+    // into rx_frame_ in a single pass. A worst case capture is a full-preamble max
+    // wire frame plus the trailing carrier octets needed to flush the word that
+    // holds the final FCS octet.
+    static constexpr std::size_t RX_TRAILING_OCTETS{RX_OCTETS_PER_WORD - 1};
+    static constexpr std::size_t RX_WORD_CAPACITY{
+        (WIRE_CAPACITY + RX_TRAILING_OCTETS + RX_OCTETS_PER_WORD - 1) / RX_OCTETS_PER_WORD};
+    std::array<std::uint32_t, RX_WORD_CAPACITY> rx_words_{};
     std::array<std::uint8_t, WIRE_CAPACITY> rx_frame_{};
-    std::array<std::uint8_t, WIRE_CAPACITY> rx_aligned_{};
     bool receiving_{false};
 };
 

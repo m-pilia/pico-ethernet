@@ -7,5 +7,7 @@ naming of variables/functions/arguments, unless explicitly asked to. Do not
 comment on what is already clear from the implementation. Only comment on
 non-trivial aspects that cannot be deduced by naming.
 
+Do not add comments to Bazel targets stating what they do.
+
 Do not add references to intermediate milestones or to any untracked documents
 into source code or tracked documentation.

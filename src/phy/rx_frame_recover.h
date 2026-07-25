@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Martino Pilia
+
+#ifndef PHY_RX_FRAME_RECOVER_H
+#define PHY_RX_FRAME_RECOVER_H
+
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <expected>
+#include <span>
+
+#include "src/mac/crc32.h"
+#include "src/mac/ethernet_frame.h"
+
+namespace pico_ethernet {
+
+// Recover a byte-aligned, FCS-delimited frame from the raw octet stream the RX
+// decoder autopushes, in a single pass over the captured bits.
+//
+// Two artefacts of the carrier-gated decoder have to be undone. First, it starts
+// shifting bits at an arbitrary point in the preamble, so its octet boundaries are
+// offset from the frame's true byte boundaries by 0..7 bits (a byte-level SFD
+// search fails on 7 of 8 frames). Second, it keeps running past the FCS into
+// trailing line noise until the carrier drops, so the capture is the frame plus
+// junk and the true end must be found rather than assumed.
+//
+// The received bit stream is LSB-first, so the preamble (0x55) is the alternating
+// pattern 1,0,1,0,... and the SFD (0xD5) is 1,0,1,0,1,0,1,1 -- the only 8-bit
+// window closing with two 1s, and thus the unambiguous byte-alignment marker. This
+// finds it at the bit level, then reassembles the following octets at the recovered
+// bit offset while feeding each finished octet into the running FCS and writing it
+// straight into `out`, stopping the instant the running CRC hits the end-of-frame
+// residual -- alignment, frame-end delimiting and FCS validation in one walk.
+//
+// `out` receives the destination..FCS frame (no preamble/SFD); the returned length
+// spans it including the FCS. Filtering and stripping the FCS are the caller's.
+// Errors mirror the MAC parser: BadPreamble (no SFD -- idle noise or a partial
+// capture), Runt (< MIN_FRAME_WITH_FCS octets after the SFD), Giant
+// (MAX_FRAME_WITH_FCS octets reached with no valid FCS), BadFcs (capture exhausted
+// with no valid FCS).
+[[nodiscard]] constexpr std::expected<std::size_t, FrameError>
+recover_frame(std::span<const std::uint8_t> raw, std::span<std::uint8_t> out) {
+    assert(out.size() >= MAX_FRAME_WITH_FCS);
+
+    const std::size_t total_bits{raw.size() * 8};
+    const auto bit_at = [raw](std::size_t g) -> std::uint8_t {
+        return static_cast<std::uint8_t>((raw[g / 8] >> (g % 8)) & 1u);
+    };
+
+    // SFD delimiter (LSB-first): 1,0,1,0,1,0,1,1.
+    std::size_t data_start{total_bits}; // sentinel: not found
+    for (std::size_t g{0}; g + 8 <= total_bits; ++g) {
+        if (bit_at(g) == 1 && bit_at(g + 1) == 0 && bit_at(g + 2) == 1 && bit_at(g + 3) == 0 && bit_at(g + 4) == 1 &&
+            bit_at(g + 5) == 0 && bit_at(g + 6) == 1 && bit_at(g + 7) == 1) {
+            data_start = g + 8;
+            break;
+        }
+    }
+    if (data_start == total_bits) {
+        return std::unexpected(FrameError::BadPreamble);
+    }
+
+    std::uint32_t crc{0xFFFFFFFFu};
+    std::size_t len{0};
+    for (std::size_t g{data_start}; g + 8 <= total_bits; g += 8) {
+        std::uint8_t byte{0};
+        for (std::size_t b{0}; b < 8; ++b) {
+            byte |= static_cast<std::uint8_t>(bit_at(g + b) << b);
+        }
+        out[len] = byte;
+        crc = detail::CRC32_TABLE[(crc ^ byte) & 0xFFu] ^ (crc >> 8);
+        ++len;
+        if (len >= MIN_FRAME_WITH_FCS && crc == CRC32_RESIDUAL_RAW) {
+            return len;
+        }
+        if (len >= MAX_FRAME_WITH_FCS) {
+            return std::unexpected(FrameError::Giant);
+        }
+    }
+    return std::unexpected(len < MIN_FRAME_WITH_FCS ? FrameError::Runt : FrameError::BadFcs);
+}
+
+} // namespace pico_ethernet
+
+#endif // PHY_RX_FRAME_RECOVER_H

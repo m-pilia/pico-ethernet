@@ -3,9 +3,10 @@
 ;
 ; RX state machine: recovers the 10BASE-T Manchester bit stream sliced by the
 ; comparator front-end back into wire-frame octets. IN base = RXD (data slicer,
-; GP8); IN base + 1 = RXC (carrier detect, GP9); JMP pin = RXD. Bytes are shifted
-; in LSB-first (IEEE 802.3) and autopushed one octet at a time, mirroring the
-; LSB-first octet shift of the LEVEL transmit SM.
+; GP8); IN base + 1 = RXC (carrier detect, GP9); JMP pin = RXD. Bits are shifted
+; in LSB-first (IEEE 802.3) and autopushed a full 32-bit word (four octets) at a
+; time, so the RX DMA moves four times less data than a byte-per-word push and the
+; landing buffer is packed dense; the CPU unpacks the four octets per word.
 ;
 ; Manchester convention (matching tx_level.pio): data bit 1 = -V then +V, data
 ; bit 0 = +V then -V. RXD is the sign of the differential, so RXD is low in a
@@ -43,5 +44,5 @@ first_high:                  ; first half high -> data bit 0 (+V then -V)
     set y, 0
     nop                      ; balance the taken/!taken jmp so both branches align
 emit:
-    in y, 1 [4]              ; shift the data bit in (autopush at 8); advance to next first half
+    in y, 1 [4]              ; shift the data bit in (autopush at 32); advance to next first half
     jmp decode

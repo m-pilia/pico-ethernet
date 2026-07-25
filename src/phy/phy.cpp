@@ -5,13 +5,15 @@
 
 #include <algorithm>
 #include <cassert>
-#include <optional>
+#include <expected>
+#include <span>
 
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
 
 #include "src/phy/phy_timing.h"
-#include "src/phy/rx_frame_align.h"
+#include "src/phy/rx_frame_recover.h"
+#include "src/phy/rx_pio_config.h"
 #include "src/phy/tx_emphasis.h"
 
 #include "rx.pio.h"
@@ -108,10 +110,7 @@ void Phy::configure_rx() {
     gpio_init(pins_.rxc);
 
     rx_cfg_ = rx_manchester_program_get_default_config(offset_rx_);
-    sm_config_set_in_pins(&rx_cfg_, pins_.rxd);      // IN base = RXD; base + 1 = RXC
-    sm_config_set_jmp_pin(&rx_cfg_, pins_.rxd);      // jmp pin samples RXD
-    sm_config_set_in_shift(&rx_cfg_, true, true, 8); // shift right, autopush, one octet
-    sm_config_set_clkdiv(&rx_cfg_, 1.0f);            // 12 cycles/bit at 120 MHz
+    configure_rx_shift(rx_cfg_, pins_.rxd);
     pio_sm_init(pio_, sm_rx_, offset_rx_, &rx_cfg_);
 }
 
@@ -143,29 +142,31 @@ Phy::RxFrame Phy::poll_rx() {
     }
 
     // Carrier dropped -> end of frame. The RX SM has stalled on the missing edges
-    // and DMA has drained every complete octet, so the remaining count is stable.
+    // and DMA has drained every complete word, so the remaining count is stable.
     dma_channel_abort(dma_rx_);
     const std::uint32_t remaining{dma_channel_hw_addr(dma_rx_)->transfer_count};
-    const std::size_t count{rx_words_.size() - remaining};
+    const std::size_t words{rx_words_.size() - remaining};
 
-    // The autopushed octet lands in the top byte of the 32-bit FIFO word
-    // (shift-right, 8-bit threshold), LSB-first within the byte.
-    for (std::size_t i{0}; i < count; ++i) {
-        rx_frame_[i] = static_cast<std::uint8_t>(rx_words_[i] >> 24);
-    }
+    // The words pack four recovered octets each, LSB-first, so on this little-endian
+    // core the landing array reads directly as the packed octet stream (octet j =
+    // byte j of rx_words_). recover_frame() re-aligns and FCS-delimits it in one
+    // pass -- the carrier gate started the decoder mid-preamble, so its octet
+    // boundaries are bit-offset from the frame's.
+    const std::span<const std::uint8_t> raw{
+        reinterpret_cast<const std::uint8_t*>(rx_words_.data()), words * RX_OCTETS_PER_WORD};
+    const std::expected<std::size_t, FrameError> recovered{recover_frame(raw, rx_frame_)};
 
     arm_rx();
 
-    // The carrier gate started the decoder mid-preamble, so these octets are
-    // offset from the frame's byte boundaries by 0..7 bits; recover alignment from
-    // the SFD before the byte-oriented MAC parser sees them. No SFD means the
-    // carrier carried no decodable frame (idle noise or a partial capture).
-    const std::optional<std::size_t> aligned{
-        align_to_sfd(std::span<const std::uint8_t>(rx_frame_.data(), count), rx_aligned_)};
-    if (!aligned) {
-        return {.kind = RxFrame::Kind::Glitch, .wire = {}};
+    if (!recovered) {
+        // No SFD means the carrier carried no decodable frame (idle noise or a
+        // partial capture); the remaining errors are captured-but-rejected frames.
+        if (recovered.error() == FrameError::BadPreamble) {
+            return {.kind = RxFrame::Kind::Glitch};
+        }
+        return {.kind = RxFrame::Kind::Error, .error = recovered.error()};
     }
-    return {.kind = RxFrame::Kind::Frame, .wire = std::span<const std::uint8_t>(rx_aligned_.data(), *aligned)};
+    return {.kind = RxFrame::Kind::Frame, .frame = std::span<const std::uint8_t>(rx_frame_.data(), *recovered)};
 }
 
 bool Phy::transmit(std::span<const std::uint8_t> wire_frame) {
@@ -238,8 +239,7 @@ void Phy::force_idle() {
 
 void Phy::emit_nlp() {
     // A single ~100 ns positive excursion. Skip while a frame is in flight so the
-    // pulse never corrupts data. The exact width is trimmed on-target against the
-    // scope.
+    // pulse never corrupts data.
     if (active_ || transmitting()) {
         return;
     }

@@ -35,7 +35,6 @@ cc_library(
         "//src/mac:ethernet_frame",
         "//src/mac:frame_builder",
         "//src/mac:frame_filter",
-        "//src/mac:frame_parser",
         "//src/mac:mac_address",
         "//src/phy:phy",
         "//src/phy:phy_stats",

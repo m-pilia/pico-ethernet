@@ -50,9 +50,10 @@ class CdcEcmDevice {
     [[nodiscard]] bool on_get_statistic(std::uint16_t selector, std::uint32_t& value) const;
 
   private:
-    // Runs a recovered wire frame through the MAC parse/filter and, on success,
-    // hands the host-facing frame to the CDC-ECM transmit path.
-    void deliver_to_host(std::span<const std::uint8_t> wire_frame);
+    // Applies the destination filter to a byte-aligned, FCS-delimited frame from
+    // the PHY and, on acceptance, strips the FCS and hands the host-facing frame to
+    // the CDC-ECM transmit path.
+    void deliver_to_host(std::span<const std::uint8_t> frame);
 
     MacAddress mac_address_;
     Phy& phy_;

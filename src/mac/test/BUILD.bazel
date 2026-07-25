@@ -1,4 +1,16 @@
-load("@rules_cc//cc:defs.bzl", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
+cc_library(
+    name = "frame_parser",
+    testonly = True,
+    hdrs = ["frame_parser.h"],
+    visibility = ["//src/phy/test:__pkg__"],
+    deps = [
+        "//src/mac:crc32",
+        "//src/mac:ethernet_frame",
+        "//src/mac:frame_filter",
+    ],
+)
 
 cc_test(
     name = "mac_address_test",
@@ -68,8 +80,8 @@ cc_test(
         "//src/mac:ethernet_frame",
         "//src/mac:frame_builder",
         "//src/mac:frame_filter",
-        "//src/mac:frame_parser",
         "//src/mac:mac_address",
+        ":frame_parser",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )

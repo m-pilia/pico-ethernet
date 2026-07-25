@@ -35,14 +35,14 @@ cc_test(
 )
 
 cc_test(
-    name = "rx_frame_align_test",
-    srcs = ["rx_frame_align_test.cpp"],
+    name = "rx_frame_recover_test",
+    srcs = ["rx_frame_recover_test.cpp"],
     deps = [
         "@googletest//:gtest",
         "@googletest//:gtest_main",
         "//src/mac:ethernet_frame",
         "//src/mac:frame_builder",
-        "//src/phy:rx_frame_align",
+        "//src/phy:rx_frame_recover",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )
@@ -76,11 +76,12 @@ cc_binary(
         "//src/mac:ethernet_frame",
         "//src/mac:frame_builder",
         "//src/mac:frame_filter",
-        "//src/mac:frame_parser",
         "//src/mac:mac_address",
+        "//src/mac/test:frame_parser",
         "//src/phy:phy_timing",
-        "//src/phy:rx_frame_align",
+        "//src/phy:rx_frame_recover",
         "//src/phy:rx_pio",
+        "//src/phy:rx_pio_config",
         "//src/phy:tx_emphasis",
         "//src/util:led_heartbeat",
         "@pico-sdk//src/rp2_common/hardware_clocks",

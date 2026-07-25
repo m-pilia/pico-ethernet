@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Martino Pilia
 
-#ifndef MAC_FRAME_PARSER_H
-#define MAC_FRAME_PARSER_H
+#ifndef MAC_TEST_FRAME_PARSER_H
+#define MAC_TEST_FRAME_PARSER_H
 
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +15,23 @@
 #include "src/mac/frame_filter.h"
 
 namespace pico_ethernet {
+
+// Length of the shortest prefix of `data` (at least `min_len` bytes) whose last
+// four bytes are a valid FCS for the bytes before them, or nullopt if none. The
+// carrier-gated receiver captures past the FCS into trailing line noise, so this
+// recovers the true frame boundary in one O(n) pass instead of assuming the whole
+// capture is the frame.
+[[nodiscard]] constexpr std::optional<std::size_t>
+fcs_frame_length(std::span<const std::uint8_t> data, std::size_t min_len) {
+    std::uint32_t crc{0xFFFFFFFFu};
+    for (std::size_t i{0}; i < data.size(); ++i) {
+        crc = detail::CRC32_TABLE[(crc ^ data[i]) & 0xFFu] ^ (crc >> 8);
+        if (i + 1 >= min_len && crc == CRC32_RESIDUAL_RAW) {
+            return i + 1;
+        }
+    }
+    return std::nullopt;
+}
 
 // Parse a received wire frame (preamble + SFD + destination..payload + FCS) into
 // the host-facing frame (destination..payload, no FCS) to deliver over CDC-ECM.
@@ -51,4 +68,4 @@ parse_frame(std::span<const std::uint8_t> wire_frame, const FrameFilter& filter)
 
 } // namespace pico_ethernet
 
-#endif // MAC_FRAME_PARSER_H
+#endif // MAC_TEST_FRAME_PARSER_H

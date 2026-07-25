@@ -14,7 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <optional>
+#include <expected>
 #include <span>
 
 #include "hardware/clocks.h"
@@ -26,10 +26,11 @@
 #include "src/mac/ethernet_frame.h"
 #include "src/mac/frame_builder.h"
 #include "src/mac/frame_filter.h"
-#include "src/mac/frame_parser.h"
 #include "src/mac/mac_address.h"
+#include "src/mac/test/frame_parser.h"
 #include "src/phy/phy_timing.h"
-#include "src/phy/rx_frame_align.h"
+#include "src/phy/rx_frame_recover.h"
+#include "src/phy/rx_pio_config.h"
 #include "src/phy/test/tx_reference.h"
 #include "src/phy/tx_emphasis.h"
 #include "src/util/led_heartbeat.h"
@@ -48,10 +49,10 @@ constexpr std::size_t MAX_WIRE{128};
 constexpr std::size_t MAX_HALFBITS{MAX_WIRE * 8 * 2};
 constexpr std::size_t MAX_WORDS{(MAX_HALFBITS + 31) / 32};
 
-std::uint8_t recovered_byte(std::uint32_t fifo_word) {
-    // Shift-right autopush, 8-bit threshold: the octet lands in the top byte,
-    // LSB-first within the byte.
-    return static_cast<std::uint8_t>(fifo_word >> 24);
+std::uint8_t recovered_octet(std::span<const std::uint32_t> words, std::size_t octet) {
+    // Shift-right autopush packs RX_OCTETS_PER_WORD octets into each word LSB-first,
+    // so octet j is byte j%RX_OCTETS_PER_WORD of the little-endian word.
+    return static_cast<std::uint8_t>(words[octet / RX_OCTETS_PER_WORD] >> (8 * (octet % RX_OCTETS_PER_WORD)));
 }
 
 // The corrupted run flattens one bit's mid-bit transition to forge a decode
@@ -156,10 +157,7 @@ struct RxSelfTest {
         pio_sm_init(pio, sm_stim, off_stim, &stim_cfg);
 
         rx_cfg = rx_manchester_program_get_default_config(off_rx);
-        sm_config_set_in_pins(&rx_cfg, RXD_PIN);
-        sm_config_set_jmp_pin(&rx_cfg, RXD_PIN);
-        sm_config_set_in_shift(&rx_cfg, true, true, 8);
-        sm_config_set_clkdiv(&rx_cfg, 1.0f);
+        configure_rx_shift(rx_cfg, RXD_PIN);
         pio_sm_init(pio, sm_rx, off_rx, &rx_cfg);
     }
 
@@ -227,11 +225,14 @@ FrameFilter promiscuous_filter() {
 // clean (unexpected) and corrupted (expected) runs.
 std::size_t first_mismatch(RxSelfTest& test, std::span<const std::uint8_t> wire, bool corrupt) {
     const std::size_t nwords{pack_stimulus(wire, test.stim_words, corrupt)};
-    const std::size_t got{test.run(nwords)};
+    // No trailing bits: the source wire frame here is a whole number of words (its
+    // length is a multiple of RX_OCTETS_PER_WORD), so the final word autopushes and
+    // every octet is recovered.
+    const std::size_t got{test.run(nwords) * RX_OCTETS_PER_WORD};
 
     const std::size_t comparable{got < wire.size() ? got : wire.size()};
     for (std::size_t i{0}; i < comparable; ++i) {
-        const std::uint8_t b{recovered_byte(test.rx_words[i])};
+        const std::uint8_t b{recovered_octet(test.rx_words, i)};
         if (b != wire[i]) {
             printf("  octet %u decoded 0x%02X, expected 0x%02X\n", static_cast<unsigned>(i), b, wire[i]);
             return i;
@@ -273,7 +274,7 @@ int run_selftest() {
         // The recovered frame must pass the MAC parser (preamble lock, alignment, FCS).
         std::array<std::uint8_t, WIRE_CAPACITY> recovered{};
         for (std::size_t i{0}; i < wire.size(); ++i) {
-            recovered[i] = recovered_byte(test.rx_words[i]);
+            recovered[i] = recovered_octet(test.rx_words, i);
         }
         const FrameFilter filter{promiscuous_filter()};
         const auto parsed = parse_frame(std::span(recovered).first(wire.size()), filter);
@@ -300,28 +301,27 @@ int run_selftest() {
             ok = false;
         }
 
-        // Octet-alignment recovery across all 8 carrier-gate bit offsets. On the
-        // wire the decoder starts mid-preamble, so its octet boundaries are
-        // bit-offset from the frame; align_to_sfd must recover the exact
-        // destination..FCS bytes at every offset.
-        std::array<std::uint8_t, WIRE_CAPACITY> raw{};
+        // Octet-alignment and FCS delimiting across all 8 carrier-gate bit offsets.
+        // On the wire the decoder starts mid-preamble, so its octet boundaries are
+        // bit-offset from the frame; recover_frame must reassemble the exact
+        // destination..FCS bytes at every offset. The 40 trailing bits guarantee the
+        // word carrying the final FCS octet autopushes regardless of offset.
         std::array<std::uint8_t, WIRE_CAPACITY> aligned{};
         const std::span<const std::uint8_t> body{wire.subspan(PREAMBLE_SFD_LEN)};
         for (std::size_t offset{0}; offset < 8; ++offset) {
-            const std::size_t nwords{pack_stimulus(wire, test.stim_words, false, offset, 8)};
-            const std::size_t got{test.run(nwords)};
-            for (std::size_t i{0}; i < got && i < raw.size(); ++i) {
-                raw[i] = recovered_byte(test.rx_words[i]);
-            }
-            const std::optional<std::size_t> len{align_to_sfd(std::span(raw).first(got), aligned)};
-            if (!len || *len < body.size() + 1) {
-                printf("FAIL: offset %u: align_to_sfd did not recover the frame\n", static_cast<unsigned>(offset));
+            const std::size_t nwords{pack_stimulus(wire, test.stim_words, false, offset, 40)};
+            const std::size_t gotwords{test.run(nwords)};
+            const std::span<const std::uint8_t> raw{
+                reinterpret_cast<const std::uint8_t*>(test.rx_words.data()), gotwords * RX_OCTETS_PER_WORD};
+            const std::expected<std::size_t, FrameError> len{recover_frame(raw, aligned)};
+            if (!len || *len != body.size()) {
+                printf("FAIL: offset %u: recover_frame did not recover the frame\n", static_cast<unsigned>(offset));
                 ok = false;
                 continue;
             }
-            bool match{aligned[0] == SFD_BYTE};
+            bool match{true};
             for (std::size_t i{0}; i < body.size(); ++i) {
-                if (aligned[i + 1] != body[i]) {
+                if (aligned[i] != body[i]) {
                     match = false;
                     break;
                 }

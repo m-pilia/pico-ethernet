@@ -9,8 +9,8 @@
 #include <cstdint>
 #include <span>
 
+#include "src/mac/ethernet_frame.h"
 #include "src/mac/frame_builder.h"
-#include "src/mac/frame_parser.h"
 
 #include "tusb.h"
 
@@ -51,30 +51,35 @@ void CdcEcmDevice::task() {
     const Phy::RxFrame received{phy_.poll_rx()};
     switch (received.kind) {
         case Phy::RxFrame::Kind::Frame:
-            deliver_to_host(received.wire);
+            deliver_to_host(received.frame);
             break;
         case Phy::RxFrame::Kind::Glitch:
             ++rx_stats_.carrier_glitch;
+            break;
+        case Phy::RxFrame::Kind::Error:
+            rx_stats_.record_error(received.error);
             break;
         case Phy::RxFrame::Kind::None:
             break;
     }
 }
 
-void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> wire_frame) {
-    const auto parsed = parse_frame(wire_frame, filter_);
-    if (!parsed) {
-        rx_stats_.record_error(parsed.error());
+void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
+    // The PHY already byte-aligned and FCS-delimited the frame; only the
+    // destination filter and FCS strip remain before handing it to the host.
+    if (!filter_.accept(destination_mac(frame))) {
+        rx_stats_.record_error(FrameError::Filtered);
         return;
     }
+    const std::span<const std::uint8_t> host_frame{frame.first(frame.size() - FCS_LEN)};
 
     // tud_network_xmit invokes on_frame_transmit synchronously, so aliasing the
     // PHY's receive buffer through pending_host_frame_ is safe for this call.
-    if (!tud_network_can_xmit(static_cast<std::uint16_t>(parsed->size()))) {
+    if (!tud_network_can_xmit(static_cast<std::uint16_t>(host_frame.size()))) {
         return;
     }
-    pending_host_frame_ = *parsed;
-    tud_network_xmit(this, static_cast<std::uint16_t>(parsed->size()));
+    pending_host_frame_ = host_frame;
+    tud_network_xmit(this, static_cast<std::uint16_t>(host_frame.size()));
     pending_host_frame_ = {};
     ++rx_stats_.delivered;
 }

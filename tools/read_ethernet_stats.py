@@ -43,6 +43,16 @@ SELECTORS = {
     0x03: "xmit_error",
     0x04: "rcv_error",
     0x12: "rcv_crc_error",
+    # Private diagnostic selectors: the internal RX sub-counters that make up
+    # rcv_error (see RxDiagnostic in src/phy/phy_stats.h).
+    0xF0: "  bad_preamble",
+    0xF1: "  runt",
+    0xF2: "  giant",
+    0xF3: "  bad_fcs",
+    0xF4: "  carrier_glitch",
+    0xF5: "  decode_error",
+    0xF6: "  pool_overflow",
+    0xF7: "  host_backpressure",
 }
 
 CDC_COMMUNICATIONS_CLASS = 0x02

@@ -32,6 +32,8 @@ struct RxStats {
     std::uint32_t filtered{0};
     std::uint32_t decode_error{0};
     std::uint32_t carrier_glitch{0};
+    std::uint32_t pool_overflow{0};     // buffer pool exhausted; frame dropped under load
+    std::uint32_t host_backpressure{0}; // USB TX busy (CDC-ECM single frame in flight over FS)
 
     constexpr void record_error(FrameError error) {
         switch (error) {
@@ -58,7 +60,8 @@ struct RxStats {
     // Frames dropped because of a corruption/decode fault. Filtered frames are an
     // intentional drop (not addressed to us), not an error, so they are excluded.
     [[nodiscard]] constexpr std::uint32_t error_total() const {
-        return bad_preamble + runt + giant + bad_fcs + decode_error + carrier_glitch;
+        return bad_preamble + runt + giant + bad_fcs + decode_error + carrier_glitch + pool_overflow +
+               host_backpressure;
     }
 };
 
@@ -111,9 +114,49 @@ ethernet_statistic(EthernetStatistic selector, const TxStats& tx, const RxStats&
     return std::nullopt;
 }
 
+// Private selectors (outside the CDC-assigned range) that break the aggregate
+// rcv_error down into its internal RX sub-counters, read through the same
+// GET_ETHERNET_STATISTIC request so no debug UART is needed to diagnose losses.
+enum class RxDiagnostic : std::uint16_t {
+    BadPreamble = 0xF0,
+    Runt = 0xF1,
+    Giant = 0xF2,
+    BadFcs = 0xF3,
+    CarrierGlitch = 0xF4,
+    DecodeError = 0xF5,
+    PoolOverflow = 0xF6,
+    HostBackpressure = 0xF7,
+};
+
+[[nodiscard]] constexpr std::optional<std::uint32_t> rx_diagnostic(std::uint16_t selector, const RxStats& rx) {
+    switch (static_cast<RxDiagnostic>(selector)) {
+        case RxDiagnostic::BadPreamble:
+            return rx.bad_preamble;
+        case RxDiagnostic::Runt:
+            return rx.runt;
+        case RxDiagnostic::Giant:
+            return rx.giant;
+        case RxDiagnostic::BadFcs:
+            return rx.bad_fcs;
+        case RxDiagnostic::CarrierGlitch:
+            return rx.carrier_glitch;
+        case RxDiagnostic::DecodeError:
+            return rx.decode_error;
+        case RxDiagnostic::PoolOverflow:
+            return rx.pool_overflow;
+        case RxDiagnostic::HostBackpressure:
+            return rx.host_backpressure;
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] constexpr std::optional<std::uint32_t>
 ethernet_statistic(std::uint16_t selector, const TxStats& tx, const RxStats& rx) {
-    return ethernet_statistic(static_cast<EthernetStatistic>(selector), tx, rx);
+    if (const std::optional<std::uint32_t> standard{
+            ethernet_statistic(static_cast<EthernetStatistic>(selector), tx, rx)}) {
+        return standard;
+    }
+    return rx_diagnostic(selector, rx);
 }
 
 } // namespace pico_ethernet

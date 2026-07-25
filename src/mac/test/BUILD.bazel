@@ -1,7 +1,7 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
-    name = "frame_parser",
+    name = "frame_parser",  # firmware-unused; kept as a test-only parser oracle
     testonly = True,
     hdrs = ["frame_parser.h"],
     visibility = ["//src/phy/test:__pkg__"],

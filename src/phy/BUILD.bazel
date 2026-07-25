@@ -40,6 +40,12 @@ cc_library(
 )
 
 cc_library(
+    name = "rx_slot_ring",
+    hdrs = ["rx_slot_ring.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "link_pulse",
     hdrs = ["link_pulse.h"],
     visibility = ["//visibility:public"],
@@ -75,6 +81,7 @@ cc_library(
         ":rx_frame_recover",
         ":rx_pio",
         ":rx_pio_config",
+        ":rx_slot_ring",
         ":tx_emphasis",
         ":tx_emphasis_pio",
         ":tx_level_pio",

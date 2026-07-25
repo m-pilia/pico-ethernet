@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <expected>
+#include <optional>
 #include <span>
 
 #include "hardware/clocks.h"
@@ -21,6 +23,12 @@
 #include "tx_level.pio.h"
 
 namespace pico_ethernet {
+
+namespace {
+// The GPIO IRQ callback carries no user data, so the active PHY is published here
+// for the RXC end-of-frame trampoline to forward to.
+Phy* s_rx_irq_phy{nullptr};
+} // namespace
 
 Phy::Phy(const Pins& pins)
     : pins_{pins} {
@@ -61,7 +69,12 @@ bool Phy::initialize() {
     configure_state_machines();
     configure_rx();
     force_idle();
-    arm_rx();
+    rearm_capture(rx_ring_.capture_slot());
+
+    // End of frame is the carrier (RXC) falling edge; finalize each frame there
+    // instead of waiting for the main loop to come back around.
+    s_rx_irq_phy = this;
+    gpio_set_irq_enabled_with_callback(pins_.rxc, GPIO_IRQ_EDGE_FALL, true, &Phy::rx_irq_handler);
 
     nlp_alarm_ = add_alarm_in_ms(nlp_.next_interval_ms(), &Phy::nlp_alarm_cb, this, true);
     return true;
@@ -104,8 +117,8 @@ void Phy::configure_rx() {
     // The comparators drive RXD/RXC externally. gpio_init de-isolates the pads
     // (RP2350 resets pads isolated, which gpio_set_input_enabled does not clear)
     // and enables their inputs without driving them; PIO reads a pad's input
-    // independently of its function select, and gpio_get() (carrier polling) reads
-    // the same input via SIO.
+    // independently of its function select, and the RXC end-of-frame IRQ and its
+    // gpio_get() spurious-edge guard read the same input via SIO.
     gpio_init(pins_.rxd);
     gpio_init(pins_.rxc);
 
@@ -114,7 +127,7 @@ void Phy::configure_rx() {
     pio_sm_init(pio_, sm_rx_, offset_rx_, &rx_cfg_);
 }
 
-void Phy::arm_rx() {
+void Phy::rearm_capture(std::size_t slot) {
     pio_sm_set_enabled(pio_, sm_rx_, false);
     pio_sm_clear_fifos(pio_, sm_rx_);
     // Full reset: PC back to the carrier-gate at the program start and the ISR
@@ -126,37 +139,57 @@ void Phy::arm_rx() {
     channel_config_set_read_increment(&c, false);
     channel_config_set_write_increment(&c, true);
     channel_config_set_dreq(&c, pio_get_dreq(pio_, sm_rx_, false));
-    dma_channel_configure(dma_rx_, &c, rx_words_.data(), &pio_->rxf[sm_rx_], rx_words_.size(), true);
+    dma_channel_configure(dma_rx_, &c, rx_pool_[slot].data(), &pio_->rxf[sm_rx_], RX_WORD_CAPACITY, true);
 
     pio_sm_set_enabled(pio_, sm_rx_, true);
-    receiving_ = false;
+}
+
+void Phy::rx_irq_handler(uint gpio, std::uint32_t events) {
+    (void)gpio;
+    (void)events;
+    if (s_rx_irq_phy != nullptr) {
+        s_rx_irq_phy->on_rx_eof();
+    }
+}
+
+void Phy::on_rx_eof() {
+    if (gpio_get(pins_.rxc)) {
+        return; // spurious edge (carrier envelope ripple); the frame is still live
+    }
+
+    // The RX SM has stalled on the missing edges and DMA has drained every complete
+    // word, so the remaining count is stable.
+    dma_channel_abort(dma_rx_);
+    const std::uint32_t remaining{dma_channel_hw_addr(dma_rx_)->transfer_count};
+    const std::size_t words{RX_WORD_CAPACITY - remaining};
+
+    // Half-duplex self-reception: while we transmit, our own signal is at our own
+    // receiver. Don't enqueue it -- discard and keep capturing into the same slot.
+    if (active_ || words == 0) {
+        rearm_capture(rx_ring_.capture_slot());
+        return;
+    }
+
+    // Hand the DMA a free buffer for the next frame and queue this one for the
+    // main-loop drain. No parsing or copying here -- that is the drain's job.
+    rearm_capture(rx_ring_.publish(words));
 }
 
 Phy::RxFrame Phy::poll_rx() {
-    if (gpio_get(pins_.rxc)) {
-        receiving_ = true;
-        return {}; // carrier present: frame still in flight
+    const std::optional<RxSlotRing<RX_POOL_SIZE>::Completed> done{rx_ring_.peek()};
+    if (!done) {
+        return {}; // completed-frame queue empty
     }
-    if (!receiving_) {
-        return {}; // idle line
-    }
-
-    // Carrier dropped -> end of frame. The RX SM has stalled on the missing edges
-    // and DMA has drained every complete word, so the remaining count is stable.
-    dma_channel_abort(dma_rx_);
-    const std::uint32_t remaining{dma_channel_hw_addr(dma_rx_)->transfer_count};
-    const std::size_t words{rx_words_.size() - remaining};
 
     // The words pack four recovered octets each, LSB-first, so on this little-endian
-    // core the landing array reads directly as the packed octet stream (octet j =
-    // byte j of rx_words_). recover_frame() re-aligns and FCS-delimits it in one
-    // pass -- the carrier gate started the decoder mid-preamble, so its octet
-    // boundaries are bit-offset from the frame's.
+    // core the capture buffer reads directly as the packed octet stream (octet j =
+    // byte j). recover_frame() re-aligns and FCS-delimits it in one pass -- the
+    // carrier gate started the decoder mid-preamble, so its octet boundaries are
+    // bit-offset from the frame's.
     const std::span<const std::uint8_t> raw{
-        reinterpret_cast<const std::uint8_t*>(rx_words_.data()), words * RX_OCTETS_PER_WORD};
+        reinterpret_cast<const std::uint8_t*>(rx_pool_[done->slot].data()), done->word_count * RX_OCTETS_PER_WORD};
     const std::expected<std::size_t, FrameError> recovered{recover_frame(raw, rx_frame_)};
-
-    arm_rx();
+    rx_ring_.release();
 
     if (!recovered) {
         // No SFD means the carrier carried no decodable frame (idle noise or a
@@ -207,6 +240,10 @@ bool Phy::transmit(std::span<const std::uint8_t> wire_frame) {
     dma_channel_configure(dma_emphasis_, &ce, &pio_->txf[sm_emphasis_], tx_emphasis_.data(), tx_len_, false);
 
     active_ = true;
+    // Half-duplex: our own carrier will assert RXC and its trailing fall would fire
+    // the end-of-frame IRQ. Suppress it for the whole transmit; service() discards
+    // the self-received capture and re-enables once the line is idle again.
+    gpio_set_irq_enabled(pins_.rxc, GPIO_IRQ_EDGE_FALL, false);
     // Enable both SMs on the same cycle (phase-locked dividers), then kick both
     // DMA channels together. TXE-vs-polarity phase alignment is confirmed and
     // trimmed on-target by the DBG_PADOUT self-test.
@@ -228,6 +265,12 @@ void Phy::service() {
     if (active_ && !transmitting()) {
         force_idle();
         active_ = false;
+        // The RX SM captured our own transmission; drop it into a clean buffer, then
+        // clear the latched TX-end edge and re-enable end-of-frame reception. The IRQ
+        // is disabled here, so this cannot race the handler.
+        rearm_capture(rx_ring_.capture_slot());
+        gpio_acknowledge_irq(pins_.rxc, GPIO_IRQ_EDGE_FALL);
+        gpio_set_irq_enabled(pins_.rxc, GPIO_IRQ_EDGE_FALL, true);
     }
 }
 

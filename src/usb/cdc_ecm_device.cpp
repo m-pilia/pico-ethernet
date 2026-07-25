@@ -48,6 +48,17 @@ void CdcEcmDevice::task() {
     tud_task();
     phy_.service();
 
+    // Mirror the interrupt-maintained pool-overflow counter into the RX stats.
+    rx_stats_.pool_overflow = phy_.rx_pool_overflow();
+
+    // recover_frame (bit realignment + CRC scan) is the costly part of the receive
+    // path, so spend it only on a frame we can hand to USB right now. CDC-ECM keeps
+    // one frame in flight, so at most one is deliverable per lap anyway; recovering
+    // more just to drop them slows the loop and lets more captures overflow. Frames
+    // left in the pool are dropped cheaply in the capture interrupt (pool_overflow).
+    if (!tud_network_can_xmit(MAX_FRAME_NO_FCS)) {
+        return;
+    }
     const Phy::RxFrame received{phy_.poll_rx()};
     switch (received.kind) {
         case Phy::RxFrame::Kind::Frame:
@@ -73,11 +84,15 @@ void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
     }
     const std::span<const std::uint8_t> host_frame{frame.first(frame.size() - FCS_LEN)};
 
-    // tud_network_xmit invokes on_frame_transmit synchronously, so aliasing the
-    // PHY's receive buffer through pending_host_frame_ is safe for this call.
+    // CDC-ECM carries one frame in flight over Full Speed; if the previous transfer
+    // has not completed, this frame is a counted drop rather than a silent loss.
     if (!tud_network_can_xmit(static_cast<std::uint16_t>(host_frame.size()))) {
+        ++rx_stats_.host_backpressure;
         return;
     }
+
+    // tud_network_xmit invokes on_frame_transmit synchronously, so aliasing the
+    // PHY's receive buffer through pending_host_frame_ is safe for this call.
     pending_host_frame_ = host_frame;
     tud_network_xmit(this, static_cast<std::uint16_t>(host_frame.size()));
     pending_host_frame_ = {};

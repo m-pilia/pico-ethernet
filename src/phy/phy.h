@@ -16,6 +16,7 @@
 #include "src/mac/ethernet_frame.h"
 #include "src/phy/link_pulse.h"
 #include "src/phy/rx_pio_config.h"
+#include "src/phy/rx_slot_ring.h"
 
 namespace pico_ethernet {
 
@@ -24,9 +25,11 @@ namespace pico_ethernet {
 // -- LEVEL drives the differential pair {TXP, TXN}, EMPHASIS drives the
 // amplitude-select pin TXE -- each fed by its own DMA channel, and emits Normal
 // Link Pulses when the line is idle. Receive: a third PIO SM slices the RXD/RXC
-// comparator outputs back into wire-frame octets via DMA, recovered by poll_rx().
-// The system clock is run at 120 MHz so a 50 ns half-bit is an exact 6 PIO
-// cycles. The link/CSMA state machine is added later.
+// comparator outputs back into octets via DMA into a pool of capture buffers; the
+// RXC falling edge (end of frame) is finalized in an interrupt that hands the DMA
+// the next free buffer, and poll_rx() drains and recovers completed frames from the
+// main loop. The system clock is run at 120 MHz so a 50 ns half-bit is an exact 6
+// PIO cycles.
 class Phy {
   public:
     struct Pins {
@@ -76,15 +79,21 @@ class Phy {
     // main loop so idle handling stays out of IRQ context.
     void service();
 
-    // Drains the receiver: detects carrier via RXC, and on carrier drop (EOF)
-    // returns the octets the RX SM recovered, then re-arms for the next frame.
+    // Dequeues one frame the end-of-frame interrupt captured, recovers it in a
+    // single pass, and returns it; None when the completed-frame queue is empty.
     // Call from the main loop.
     [[nodiscard]] RxFrame poll_rx();
+
+    // Running count of frames dropped because the receive buffer pool was exhausted
+    // (the drain fell behind line rate). A visible, counted drop, not a silent loss.
+    [[nodiscard]] std::uint32_t rx_pool_overflow() const { return rx_ring_.overflow(); }
 
   private:
     void configure_state_machines();
     void configure_rx();
-    void arm_rx();
+    void rearm_capture(std::size_t slot);
+    void on_rx_eof();
+    static void rx_irq_handler(uint gpio, std::uint32_t events);
     void force_idle();
     void emit_nlp();
     static std::int64_t nlp_alarm_cb(alarm_id_t id, void* user);
@@ -113,17 +122,24 @@ class Phy {
     bool active_{false};
 
     // The RX SM autopushes four recovered octets per 32-bit FIFO word; DMA lands
-    // them densely here. poll_rx() reads the packed words directly (no intermediate
-    // byte copy) and recover_frame() writes the byte-aligned destination..FCS frame
-    // into rx_frame_ in a single pass. A worst case capture is a full-preamble max
-    // wire frame plus the trailing carrier octets needed to flush the word that
-    // holds the final FCS octet.
+    // them densely into the current pool buffer. A worst case capture is a
+    // full-preamble max wire frame plus the trailing carrier octets needed to flush
+    // the word that holds the final FCS octet.
     static constexpr std::size_t RX_TRAILING_OCTETS{RX_OCTETS_PER_WORD - 1};
     static constexpr std::size_t RX_WORD_CAPACITY{
         (WIRE_CAPACITY + RX_TRAILING_OCTETS + RX_OCTETS_PER_WORD - 1) / RX_OCTETS_PER_WORD};
-    std::array<std::uint32_t, RX_WORD_CAPACITY> rx_words_{};
+
+    // A pool of capture buffers so the DMA can start the next frame the instant one
+    // ends (the EOF interrupt hands it a free buffer) while the main loop is still
+    // draining an earlier one -- capture and processing overlap instead of taking
+    // turns. rx_ring_ tracks which buffer is capturing and which are completed.
+    static constexpr std::size_t RX_POOL_SIZE{6};
+    std::array<std::array<std::uint32_t, RX_WORD_CAPACITY>, RX_POOL_SIZE> rx_pool_{};
+    RxSlotRing<RX_POOL_SIZE> rx_ring_{};
+
+    // The drain unpacks the packed capture words straight into rx_frame_ as the
+    // byte-aligned destination..FCS frame in a single pass. Main-loop-owned.
     std::array<std::uint8_t, WIRE_CAPACITY> rx_frame_{};
-    bool receiving_{false};
 };
 
 } // namespace pico_ethernet

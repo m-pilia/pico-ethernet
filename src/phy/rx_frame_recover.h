@@ -61,13 +61,23 @@ recover_frame(std::span<const std::uint8_t> raw, std::span<std::uint8_t> out) {
         return std::unexpected(FrameError::BadPreamble);
     }
 
+    // The SFD gives a single bit offset for the whole frame, so realignment is a
+    // fixed shift rather than a per-bit reassembly: each output byte is the low
+    // (8 - bit_off) bits of one raw byte ORed with the high bit_off bits of the next
+    // -- one shift-combine per byte instead of eight per-bit reads. Shift, feed the
+    // running CRC, and write to `out` in the same pass, stopping at the end-of-frame
+    // residual.
+    const std::size_t byte_base{data_start / 8};
+    const std::size_t bit_off{data_start % 8};
+    // With a nonzero offset each output byte straddles two raw bytes, so the last one
+    // needs a raw byte beyond it; with a zero offset it does not.
+    const std::size_t last{bit_off == 0 ? raw.size() : raw.size() - 1};
+
     std::uint32_t crc{0xFFFFFFFFu};
     std::size_t len{0};
-    for (std::size_t g{data_start}; g + 8 <= total_bits; g += 8) {
-        std::uint8_t byte{0};
-        for (std::size_t b{0}; b < 8; ++b) {
-            byte |= static_cast<std::uint8_t>(bit_at(g + b) << b);
-        }
+    for (std::size_t i{byte_base}; i < last; ++i) {
+        const unsigned high{bit_off == 0 ? 0u : static_cast<unsigned>(raw[i + 1]) << (8 - bit_off)};
+        const std::uint8_t byte{static_cast<std::uint8_t>((raw[i] >> bit_off) | high)};
         out[len] = byte;
         crc = detail::CRC32_TABLE[(crc ^ byte) & 0xFFu] ^ (crc >> 8);
         ++len;

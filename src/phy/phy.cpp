@@ -12,6 +12,7 @@
 
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
+#include "hardware/irq.h"
 
 #include "src/phy/phy_timing.h"
 #include "src/phy/rx_frame_recover.h"
@@ -88,6 +89,13 @@ bool Phy::initialize() {
     gpio_put(DEBUG_RX_EOF_PIN, false);
     gpio_set_irq_enabled_with_callback(
         pins_.rxc, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &Phy::rx_irq_handler);
+
+    // Finalize each transmit (idle drive + receiver re-arm) in the TX-DMA completion
+    // interrupt so the receiver comes back the instant our frame drains, rather than
+    // waiting for the main loop.
+    dma_channel_set_irq0_enabled(dma_level_, true);
+    irq_set_exclusive_handler(DMA_IRQ_0, &Phy::tx_dma_irq_handler);
+    irq_set_enabled(DMA_IRQ_0, true);
 
     nlp_alarm_ = add_alarm_in_ms(nlp_.next_interval_ms(), &Phy::nlp_alarm_cb, this, true);
     return true;
@@ -239,18 +247,29 @@ Phy::RxFrame Phy::poll_rx() {
 }
 
 bool Phy::transmit(std::span<const std::uint8_t> wire_frame) {
-    if (active_ || transmitting()) {
-        return false;
-    }
     if (wire_frame.empty() || wire_frame.size() > WIRE_CAPACITY) {
         return false;
     }
+    const std::size_t head{tx_head_.load(std::memory_order_relaxed)};
+    const std::size_t next{tx_advance(head)};
+    if (next == tx_tail_.load(std::memory_order_acquire)) {
+        return false; // full: the caller applies backpressure
+    }
 
-    tx_len_ = wire_frame.size();
-    std::ranges::copy(wire_frame, tx_frame_.begin());
+    // tx_head_ is producer-owned and the slot it points at is free, so fill it before
+    // publishing it to the consumer with the release store.
+    WireFrame& slot{tx_queue_[head]};
+    std::ranges::copy(wire_frame, slot.bytes.begin());
+    slot.length = wire_frame.size();
+    tx_head_.store(next, std::memory_order_release);
+    return true;
+}
+
+void Phy::start_tx(const WireFrame& frame) {
+    const std::size_t len{frame.length};
     // One emphasis bit per data bit, packed one octet per octet of frame, so both
-    // DMA channels move exactly tx_len_ bytes.
-    compute_emphasis_bits(std::span(tx_frame_).first(tx_len_), std::span(tx_emphasis_).first(tx_len_));
+    // DMA channels move exactly len bytes.
+    compute_emphasis_bits(std::span(frame.bytes).first(len), std::span(tx_emphasis_).first(len));
 
     // Reset both SMs to the program start with cleared FIFOs so the two-SM phase
     // is deterministic from the first bit.
@@ -266,28 +285,25 @@ bool Phy::transmit(std::span<const std::uint8_t> wire_frame) {
     channel_config_set_read_increment(&cl, true);
     channel_config_set_write_increment(&cl, false);
     channel_config_set_dreq(&cl, pio_get_dreq(pio_, sm_level_, true));
-    dma_channel_configure(dma_level_, &cl, &pio_->txf[sm_level_], tx_frame_.data(), tx_len_, false);
+    dma_channel_configure(dma_level_, &cl, &pio_->txf[sm_level_], frame.bytes.data(), len, false);
 
     dma_channel_config ce{dma_channel_get_default_config(dma_emphasis_)};
     channel_config_set_transfer_data_size(&ce, DMA_SIZE_8);
     channel_config_set_read_increment(&ce, true);
     channel_config_set_write_increment(&ce, false);
     channel_config_set_dreq(&ce, pio_get_dreq(pio_, sm_emphasis_, true));
-    dma_channel_configure(dma_emphasis_, &ce, &pio_->txf[sm_emphasis_], tx_emphasis_.data(), tx_len_, false);
+    dma_channel_configure(dma_emphasis_, &ce, &pio_->txf[sm_emphasis_], tx_emphasis_.data(), len, false);
 
     active_ = true;
-    // Half-duplex: our own carrier will assert RXC and its trailing fall would fire
-    // the end-of-frame IRQ. Suppress it for the whole transmit; service() discards
-    // the self-received capture and re-enables once the line is idle again.
-    gpio_set_irq_enabled(pins_.rxc, GPIO_IRQ_EDGE_FALL, false);
-    instrument_rxc_disabled_begin(); // TEMPORARY: M1.5 Step 1
     // Enable both SMs on the same cycle (phase-locked dividers), then kick both
     // DMA channels together. TXE-vs-polarity phase alignment is confirmed and
-    // trimmed on-target by the DBG_PADOUT self-test.
+    // trimmed on-target by the DBG_PADOUT self-test. The end-of-frame IRQ stays
+    // enabled through the transmit: our own carrier holds RXC high (no falling edge)
+    // until on_tx_complete() drives idle, and any capture is dropped by the active_
+    // guard in on_rx_eof().
     pio_enable_sm_mask_in_sync(pio_, (1u << sm_level_) | (1u << sm_emphasis_));
     dma_start_channel_mask(
         (1u << static_cast<std::uint32_t>(dma_level_)) | (1u << static_cast<std::uint32_t>(dma_emphasis_)));
-    return true;
 }
 
 bool Phy::transmitting() const {
@@ -299,17 +315,49 @@ bool Phy::transmitting() const {
 }
 
 void Phy::service() {
-    if (active_ && !transmitting()) {
-        force_idle();
-        active_ = false;
-        // The RX SM captured our own transmission; drop it into a clean buffer, then
-        // clear the latched TX-end edge and re-enable end-of-frame reception. The IRQ
-        // is disabled here, so this cannot race the handler.
-        rearm_capture(rx_ring_.capture_slot());
-        gpio_acknowledge_irq(pins_.rxc, GPIO_IRQ_EDGE_FALL);
-        gpio_set_irq_enabled(pins_.rxc, GPIO_IRQ_EDGE_FALL, true);
-        instrument_rxc_disabled_end(); // TEMPORARY: M1.5 Step 1
+    // Start the next queued frame once the transmitter is idle and the interframe
+    // gap has elapsed since the previous frame drained.
+    if (active_ || transmitting()) {
+        return;
     }
+    const std::size_t tail{tx_tail_.load(std::memory_order_relaxed)};
+    if (tail == tx_head_.load(std::memory_order_acquire)) {
+        return; // queue empty
+    }
+    if (time_us_32() - tx_last_end_us_.load(std::memory_order_relaxed) < (IFG_NS + 999) / 1000) {
+        return;
+    }
+    start_tx(tx_queue_[tail]);
+}
+
+void Phy::tx_dma_irq_handler() {
+    if (s_rx_irq_phy != nullptr) {
+        s_rx_irq_phy->on_tx_complete();
+    }
+}
+
+void Phy::on_tx_complete() {
+    dma_channel_acknowledge_irq0(dma_level_);
+
+    // The DMA has handed off the last byte, but the PIO FIFOs and shifters still hold
+    // a few bytes; wait so force_idle() does not clip the tail of the frame. The FIFO
+    // draining leaves up to one octet still shifting out of the OSR after the FIFO
+    // reads empty, so add a two-octet margin before driving idle.
+    while (transmitting()) {
+        tight_loop_contents();
+    }
+    busy_wait_at_least_cycles(2 * 8 * PIO_CYCLES_PER_BIT);
+    force_idle();
+
+    // The RX SM captured our own transmission; drop it into a clean buffer so the
+    // receiver is immediately live again for the next incoming frame.
+    rearm_capture(rx_ring_.capture_slot());
+
+    tx_last_end_us_.store(time_us_32(), std::memory_order_relaxed);
+    // Release the just-sent slot back to the producer, then clear active_ last so a
+    // service() that observes it false also sees the advanced tail.
+    tx_tail_.store(tx_advance(tx_tail_.load(std::memory_order_relaxed)), std::memory_order_release);
+    active_ = false;
 }
 
 void Phy::force_idle() {

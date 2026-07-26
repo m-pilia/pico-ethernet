@@ -52,6 +52,14 @@ void CdcEcmDevice::task() {
     }
     phy_.service();
 
+    // A frame backpressured in on_frame_received: retry now that draining may have
+    // freed a queue slot, and resume host reception once it lands.
+    if (tx_backpressured_ && phy_.transmit(pending_tx_.view())) {
+        tx_backpressured_ = false;
+        ++stats_.accepted;
+        tud_network_recv_renew();
+    }
+
     // Mirror the interrupt-maintained pool-overflow counter into the RX stats.
     rx_stats_.pool_overflow = phy_.rx_pool_overflow();
 
@@ -110,21 +118,25 @@ void CdcEcmDevice::set_link_up(bool up) {
 }
 
 bool CdcEcmDevice::on_frame_received(std::span<const std::uint8_t> host_frame) {
-    // Build the wire frame (pad, FCS, preamble/SFD) and hand it to the PHY. We
-    // copy synchronously here, so returning false lets TinyUSB re-arm reception.
+    // Build the wire frame (pad, FCS, preamble/SFD) and enqueue it. build_frame copies
+    // out of the USB buffer synchronously, so on success we return false to let
+    // TinyUSB re-arm reception immediately.
     const auto built = build_frame(host_frame);
     if (!built) {
         ++stats_.build_failed;
         return false;
     }
 
-    if (!phy_.transmit(built->view())) {
-        ++stats_.dropped_busy;
+    if (phy_.transmit(built->view())) {
+        ++stats_.accepted;
         return false;
     }
 
-    ++stats_.accepted;
-    return false;
+    // TX queue full: hold the built frame and return true *without* renewing so the
+    // host is throttled (no drop). task() enqueues it and renews once a slot frees.
+    pending_tx_ = *built;
+    tx_backpressured_ = true;
+    return true;
 }
 
 std::uint16_t CdcEcmDevice::on_frame_transmit(std::span<std::uint8_t> dst) {

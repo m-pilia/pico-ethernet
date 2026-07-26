@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <span>
 
+#include "src/mac/ethernet_frame.h"
 #include "src/mac/frame_filter.h"
 #include "src/mac/mac_address.h"
 #include "src/phy/phy.h"
@@ -62,6 +63,12 @@ class CdcEcmDevice {
     TxStats stats_{};
     RxStats rx_stats_{};
     std::span<const std::uint8_t> pending_host_frame_{};
+
+    // A host frame built while the PHY TX queue was full: held here and retried from
+    // task() once a slot frees, with reception left un-renewed until then so the host
+    // is backpressured rather than the frame dropped.
+    WireFrame pending_tx_{};
+    bool tx_backpressured_{false};
 };
 
 } // namespace pico_ethernet

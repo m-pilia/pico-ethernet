@@ -5,6 +5,7 @@
 #define PHY_PHY_H
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -66,17 +67,19 @@ class Phy {
     // resources could not be claimed.
     [[nodiscard]] bool initialize();
 
-    // Hands a complete wire frame (preamble..FCS) to the transmit engine. The
-    // bytes are copied into an internal DMA buffer, so the span need not outlive
-    // the call. Returns false if a previous frame is still transmitting, or the
-    // frame is empty or larger than a wire frame.
+    // Enqueues a complete wire frame (preamble..FCS) for transmission. The bytes
+    // are copied into the TX queue, so the span need not outlive the call. Returns
+    // false if the queue is full (the caller should apply backpressure) or the frame
+    // is empty or larger than a wire frame. Queued frames are clocked out one at a
+    // time by service(), spaced by the interframe gap.
     [[nodiscard]] bool transmit(std::span<const std::uint8_t> wire_frame);
 
     // True while a frame is being clocked out.
     [[nodiscard]] bool transmitting() const;
 
-    // Completes end-of-frame idle (TP_IDL) once a transmit drains. Call from the
-    // main loop so idle handling stays out of IRQ context.
+    // Starts the next queued frame when the transmitter is idle and the interframe
+    // gap has elapsed. End-of-transmit finalization (idle drive, receiver re-arm)
+    // is handled in the TX-DMA completion interrupt, not here. Call from the loop.
     void service();
 
     // Dequeues one frame the end-of-frame interrupt captured, recovers it in a
@@ -94,6 +97,9 @@ class Phy {
     void rearm_capture(std::size_t slot);
     void on_rx_eof();
     static void rx_irq_handler(uint gpio, std::uint32_t events);
+    void start_tx(const WireFrame& frame);
+    void on_tx_complete();
+    static void tx_dma_irq_handler();
     void force_idle();
     void emit_nlp();
     static std::int64_t nlp_alarm_cb(alarm_id_t id, void* user);
@@ -116,10 +122,20 @@ class Phy {
     NlpScheduler nlp_{};
     alarm_id_t nlp_alarm_{-1};
 
-    std::array<std::uint8_t, WIRE_CAPACITY> tx_frame_{};
+    // TX queue: host frames are enqueued (copied) here and clocked out one at a
+    // time. Single-producer/single-consumer, like RxSlotRing: transmit() (main-loop
+    // thread) is the producer and owns tx_head_; on_tx_complete() (TX-DMA interrupt)
+    // is the consumer and owns tx_tail_. One slot stays free to tell full from empty,
+    // so N slots queue N-1 frames.
+    static constexpr std::size_t TX_QUEUE_SIZE{5};
+    static constexpr std::size_t tx_advance(std::size_t i) { return (i + 1 == TX_QUEUE_SIZE) ? 0 : i + 1; }
+    std::array<WireFrame, TX_QUEUE_SIZE> tx_queue_{};
+    std::atomic<std::size_t> tx_head_{0};
+    std::atomic<std::size_t> tx_tail_{0};
+    std::atomic<std::uint32_t> tx_last_end_us_{0}; // for interframe-gap spacing
+
     std::array<std::uint8_t, WIRE_CAPACITY> tx_emphasis_{};
-    std::size_t tx_len_{0};
-    bool active_{false};
+    std::atomic<bool> active_{false}; // set in start_tx (thread), cleared in on_tx_complete (IRQ)
 
     // The RX SM autopushes four recovered octets per 32-bit FIFO word; DMA lands
     // them densely into the current pool buffer. A worst case capture is a

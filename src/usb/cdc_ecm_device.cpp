@@ -9,20 +9,49 @@
 #include <cstdint>
 #include <span>
 
+#include "hardware/irq.h"
+
 #include "src/mac/ethernet_frame.h"
 #include "src/mac/frame_builder.h"
 #include "src/util/instrumentation.h" // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics
 
 #include "tusb.h"
 
+// Shared USB interrupt handler driving tud_task_ext(); defined below.
+extern "C" void pico_ethernet_usb_irq_handler(void);
+
 namespace pico_ethernet {
 
 namespace {
 constexpr std::uint8_t USB_RHPORT{0};
 
+// NVIC priority for USBCTRL_IRQ. Higher numeric value = less urgent on Cortex-M33;
+// this is below the PHY's IRQs (RXC edge on IO_IRQ_BANK0 and TX-DMA on DMA_IRQ_0,
+// both at the pico-sdk default 0x80), so the real-time capture path preempts the
+// USB service (which runs the whole device task, including a full-MTU frame copy).
+// This is the NVIC hardware priority, distinct from the shared-handler *order*
+// priority that sequences our handler after TinyUSB's on the same line.
+constexpr std::uint8_t USB_IRQ_PRIORITY{0xC0};
+
 // The TinyUSB network callbacks have C linkage and no user-data argument, so the
 // active device is published here for them to forward to.
 CdcEcmDevice* g_instance{nullptr};
+
+// Disables the USB controller interrupt for its scope. tud_task_ext() runs in that
+// interrupt, so any main-loop call into the TinyUSB net-driver API
+// (tud_network_can_xmit/xmit, tud_network_link_state) and any read of state the ISR
+// callbacks rewrite (filter_) must be guarded by this to avoid racing the ISR. It
+// masks only USBCTRL_IRQ, so the PHY's real-time IRQs stay live while it is held.
+class UsbInterruptLock {
+  public:
+    UsbInterruptLock() : was_enabled_{irq_is_enabled(USBCTRL_IRQ)} { irq_set_enabled(USBCTRL_IRQ, false); }
+    ~UsbInterruptLock() { irq_set_enabled(USBCTRL_IRQ, was_enabled_); }
+    UsbInterruptLock(const UsbInterruptLock&) = delete;
+    UsbInterruptLock& operator=(const UsbInterruptLock&) = delete;
+
+  private:
+    bool was_enabled_;
+};
 } // namespace
 
 CdcEcmDevice::CdcEcmDevice(const MacAddress& mac_address, Phy& phy)
@@ -39,6 +68,14 @@ void CdcEcmDevice::initialize() {
 
     tusb_init();
 
+    // Service the device stack from the USB interrupt. TinyUSB's DCD registered its
+    // handler at the highest order priority during tusb_init(); ours runs after it
+    // (lowest order priority) and drains the queued events, so the net callbacks fire
+    // in ISR context instead of from the main loop.
+    irq_add_shared_handler(USBCTRL_IRQ, &pico_ethernet_usb_irq_handler,
+                           PICO_SHARED_IRQ_HANDLER_LOWEST_ORDER_PRIORITY);
+    irq_set_priority(USBCTRL_IRQ, USB_IRQ_PRIORITY);
+
     // Present the cable as connected so the host activates the data interface and
     // sends frames. The wire-driven link state replaces this forced-up value with
     // the link FSM bring-up.
@@ -46,19 +83,10 @@ void CdcEcmDevice::initialize() {
 }
 
 void CdcEcmDevice::task() {
-    {
-        const InstrumentScope timer{g_instrument.tud_task}; // TEMPORARY: M1.5 Step 1
-        tud_task();
-    }
     phy_.service();
 
-    // A frame backpressured in on_frame_received: retry now that draining may have
-    // freed a queue slot, and resume host reception once it lands.
-    if (tx_backpressured_ && phy_.transmit(pending_tx_.view())) {
-        tx_backpressured_ = false;
-        ++stats_.accepted;
-        tud_network_recv_renew();
-    }
+    // Move host frames the USB ISR queued into the PHY transmit path.
+    drain_usb_tx();
 
     // Mirror the interrupt-maintained pool-overflow counter into the RX stats.
     rx_stats_.pool_overflow = phy_.rx_pool_overflow();
@@ -68,8 +96,11 @@ void CdcEcmDevice::task() {
     // one frame in flight, so at most one is deliverable per lap anyway; recovering
     // more just to drop them slows the loop and lets more captures overflow. Frames
     // left in the pool are dropped cheaply in the capture interrupt (pool_overflow).
-    if (!tud_network_can_xmit(MAX_FRAME_NO_FCS)) {
-        return;
+    {
+        UsbInterruptLock lock;
+        if (!tud_network_can_xmit(MAX_FRAME_NO_FCS)) {
+            return;
+        }
     }
     ++g_instrument.can_xmit_true; // TEMPORARY: M1.5 Step 1
     const Phy::RxFrame received{phy_.poll_rx()};
@@ -88,14 +119,54 @@ void CdcEcmDevice::task() {
     }
 }
 
+void CdcEcmDevice::drain_usb_tx() {
+    // Retry a frame held over from a full PHY TX queue.
+    if (tx_backpressured_) {
+        if (phy_.transmit(pending_tx_.view())) {
+            tx_backpressured_ = false;
+            ++stats_.accepted;
+        } else {
+            return; // PHY TX still congested; dequeueing more would just fail too
+        }
+    }
+
+    // Frame and transmit what the ISR queued. The slot is released (tail advanced)
+    // before the PHY transmit, since the wire frame has already been copied out into
+    // build_frame's result, so the ISR is free to reuse the slot immediately.
+    for (;;) {
+        const std::size_t tail{usb_tx_tail_.load(std::memory_order_relaxed)};
+        if (tail == usb_tx_head_.load(std::memory_order_acquire)) {
+            return; // queue empty
+        }
+        const std::span<const std::uint8_t> raw{usb_tx_slots_[tail].data.data(), usb_tx_slots_[tail].len};
+        const auto built{build_frame(raw)};
+        usb_tx_tail_.store(usb_tx_advance(tail), std::memory_order_release);
+        if (!built) {
+            ++stats_.build_failed;
+            continue;
+        }
+        if (!phy_.transmit(built->view())) {
+            pending_tx_ = *built;
+            tx_backpressured_ = true;
+            return; // PHY TX full; hold this frame, stop draining
+        }
+        ++stats_.accepted;
+    }
+}
+
 void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
     // The PHY already byte-aligned and FCS-delimited the frame; only the
     // destination filter and FCS strip remain before handing it to the host.
+    const std::span<const std::uint8_t> host_frame{frame.first(frame.size() - FCS_LEN)};
+
+    // filter_ is rewritten by the ISR's packet-filter/multicast callbacks and the
+    // xmit path races tud_task_ext() in the ISR, so the filter check and the whole
+    // TinyUSB transfer run under the USB interrupt lock.
+    UsbInterruptLock lock;
     if (!filter_.accept(destination_mac(frame))) {
         rx_stats_.record_error(FrameError::Filtered);
         return;
     }
-    const std::span<const std::uint8_t> host_frame{frame.first(frame.size() - FCS_LEN)};
 
     // CDC-ECM carries one frame in flight over Full Speed; if the previous transfer
     // has not completed, this frame is a counted drop rather than a silent loss.
@@ -114,29 +185,31 @@ void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
 
 void CdcEcmDevice::set_link_up(bool up) {
     link_up_ = up;
+    UsbInterruptLock lock;
     tud_network_link_state(USB_RHPORT, up);
 }
 
 bool CdcEcmDevice::on_frame_received(std::span<const std::uint8_t> host_frame) {
-    // Build the wire frame (pad, FCS, preamble/SFD) and enqueue it. build_frame copies
-    // out of the USB buffer synchronously, so on success we return false to let
-    // TinyUSB re-arm reception immediately.
-    const auto built = build_frame(host_frame);
-    if (!built) {
+    // ISR context. Copy the raw host frame into the SPSC queue for the main loop to
+    // build into a wire frame and transmit; always re-arm reception (return false).
+    // A frame that cannot fit a slot could never be framed either (build_frame
+    // rejects > MAX_FRAME_NO_FCS), so drop and count it rather than truncate. A full
+    // queue under load is likewise a visible counted drop, not a silent loss.
+    if (host_frame.size() > MAX_FRAME_NO_FCS) {
         ++stats_.build_failed;
         return false;
     }
-
-    if (phy_.transmit(built->view())) {
-        ++stats_.accepted;
+    const std::size_t head{usb_tx_head_.load(std::memory_order_relaxed)};
+    const std::size_t next{usb_tx_advance(head)};
+    if (next == usb_tx_tail_.load(std::memory_order_acquire)) {
+        ++stats_.usb_tx_overflow;
         return false;
     }
-
-    // TX queue full: hold the built frame and return true *without* renewing so the
-    // host is throttled (no drop). task() enqueues it and renews once a slot frees.
-    pending_tx_ = *built;
-    tx_backpressured_ = true;
-    return true;
+    UsbTxSlot& slot{usb_tx_slots_[head]};
+    std::ranges::copy(host_frame, slot.data.begin());
+    slot.len = static_cast<std::uint16_t>(host_frame.size());
+    usb_tx_head_.store(next, std::memory_order_release);
+    return false;
 }
 
 std::uint16_t CdcEcmDevice::on_frame_transmit(std::span<std::uint8_t> dst) {
@@ -180,6 +253,15 @@ bool CdcEcmDevice::on_get_statistic(std::uint16_t selector, std::uint32_t& value
 
 // TinyUSB network class callbacks (C linkage), forwarding to the active device.
 extern "C" {
+
+// Shared USB controller interrupt handler: runs after TinyUSB's DCD handler
+// (highest order priority) has enqueued device events, and drains them through
+// tud_task_ext() so the device stack is serviced from the interrupt rather than the
+// main loop. Registered in CdcEcmDevice::initialize().
+void pico_ethernet_usb_irq_handler(void) {
+    const pico_ethernet::InstrumentScope timer{pico_ethernet::g_instrument.tud_task}; // TEMPORARY: M1.5 Step 1
+    tud_task_ext(0, true);
+}
 
 // Defined by the application; TinyUSB reads it for the iMACAddress descriptor.
 std::uint8_t tud_network_mac_address[6] = {0};

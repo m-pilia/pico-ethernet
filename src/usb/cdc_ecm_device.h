@@ -4,6 +4,9 @@
 #ifndef USB_CDC_ECM_DEVICE_H
 #define USB_CDC_ECM_DEVICE_H
 
+#include <array>
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -21,15 +24,28 @@ namespace pico_ethernet {
 // the PHY transmit path. The wire-to-host receive path is added with the PHY RX
 // bring-up; until then the device-to-host direction is empty. The error-prone USB
 // plumbing (descriptors, endpoints, notifications) lives in TinyUSB.
+//
+// USB is serviced from the USB controller interrupt: a shared USBCTRL_IRQ handler
+// runs tud_task_ext() so host events are handled the instant they occur, rather
+// than once per lap of the main loop. The tud_network_recv_cb callback therefore
+// runs in ISR context and does minimal work (copies the host frame into a queue);
+// the heavy framing (build_frame + CRC) and the PHY transmit happen in the
+// main-loop dispatcher. USBCTRL_IRQ is given a less-urgent NVIC priority than the
+// PHY's real-time IRQs so a long USB service never delays frame capture. Any
+// main-loop access to the TinyUSB net-driver API or to state shared with the ISR
+// callbacks is guarded by a brief USB-interrupt disable (UsbInterruptLock).
 class CdcEcmDevice {
   public:
     CdcEcmDevice(const MacAddress& mac_address, Phy& phy);
 
-    // Publishes the MAC to TinyUSB, starts the USB device stack, registers this
-    // instance for the C callbacks, and asserts the initial link state.
+    // Publishes the MAC to TinyUSB, starts the USB device stack, registers the
+    // shared USB interrupt handler that drives tud_task_ext(), and asserts the
+    // initial link state.
     void initialize();
 
-    // Services USB events and the PHY transmit engine; call from the loop.
+    // Main-loop dispatcher: drains host frames the ISR queued into the PHY transmit
+    // path and feeds recovered RX frames back to the host. USB itself is serviced
+    // from the interrupt, not here.
     void task();
 
     void set_link_up(bool up);
@@ -38,7 +54,9 @@ class CdcEcmDevice {
     const TxStats& tx_stats() const { return stats_; }
     const RxStats& rx_stats() const { return rx_stats_; }
 
-    // Handlers invoked by the extern "C" TinyUSB network callbacks.
+    // Handlers invoked by the extern "C" TinyUSB network callbacks. recv runs in
+    // ISR context (USB is interrupt-driven); the others fire from tud_task_ext()
+    // in the same USB ISR.
     bool on_frame_received(std::span<const std::uint8_t> host_frame);
     std::uint16_t on_frame_transmit(std::span<std::uint8_t> dst);
     void on_packet_filter(std::uint16_t bitmap) { filter_.set_packet_filter(bitmap); }
@@ -56,6 +74,10 @@ class CdcEcmDevice {
     // the CDC-ECM transmit path.
     void deliver_to_host(std::span<const std::uint8_t> frame);
 
+    // Moves host frames the ISR queued (USB->PHY direction) into the PHY transmit
+    // engine, building wire frames and applying PHY-TX backpressure.
+    void drain_usb_tx();
+
     MacAddress mac_address_;
     Phy& phy_;
     bool link_up_{false};
@@ -65,10 +87,25 @@ class CdcEcmDevice {
     std::span<const std::uint8_t> pending_host_frame_{};
 
     // A host frame built while the PHY TX queue was full: held here and retried from
-    // task() once a slot frees, with reception left un-renewed until then so the host
-    // is backpressured rather than the frame dropped.
+    // drain_usb_tx() once a slot frees. PHY-TX backpressure (main-loop only); the
+    // host keeps flowing since the ISR always re-arms USB reception.
     WireFrame pending_tx_{};
     bool tx_backpressured_{false};
+
+    // SPSC queue of raw host frames bridging the USB ISR (producer) to the main
+    // loop (consumer). Single-producer/single-consumer: the ISR owns usb_tx_head_,
+    // the main loop owns usb_tx_tail_, so the indices need no lock.
+    struct UsbTxSlot {
+        std::array<std::uint8_t, MAX_FRAME_NO_FCS> data{};
+        std::uint16_t len{0};
+    };
+    static constexpr std::size_t USB_TX_QUEUE_SIZE{4};
+    static constexpr std::size_t usb_tx_advance(std::size_t i) {
+        return (i + 1 == USB_TX_QUEUE_SIZE) ? 0 : i + 1;
+    }
+    std::array<UsbTxSlot, USB_TX_QUEUE_SIZE> usb_tx_slots_{};
+    std::atomic<std::size_t> usb_tx_head_{0};
+    std::atomic<std::size_t> usb_tx_tail_{0};
 };
 
 } // namespace pico_ethernet

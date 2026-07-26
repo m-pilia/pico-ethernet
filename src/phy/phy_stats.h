@@ -14,9 +14,10 @@ namespace pico_ethernet {
 
 // Transmit-side outcome counters.
 struct TxStats {
-    std::uint32_t accepted{0};     // frames handed to the PHY
-    std::uint32_t build_failed{0}; // host frame too long to frame
-    std::uint32_t dropped_busy{0}; // PHY still transmitting a prior frame
+    std::uint32_t accepted{0};        // frames handed to the PHY
+    std::uint32_t build_failed{0};    // host frame too long to frame
+    std::uint32_t dropped_busy{0};    // PHY still transmitting a prior frame
+    std::uint32_t usb_tx_overflow{0}; // host frame dropped: USB->PHY queue full under load
 };
 
 // Receive-side counters. The per-FrameError fields come out of the MAC parser
@@ -105,7 +106,7 @@ ethernet_statistic(EthernetStatistic selector, const TxStats& tx, const RxStats&
         case EthernetStatistic::RcvOk:
             return rx.delivered;
         case EthernetStatistic::XmitError:
-            return tx.build_failed + tx.dropped_busy;
+            return tx.build_failed + tx.dropped_busy + tx.usb_tx_overflow;
         case EthernetStatistic::RcvError:
             return rx.error_total();
         case EthernetStatistic::RcvCrcError:

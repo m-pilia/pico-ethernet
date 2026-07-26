@@ -16,14 +16,14 @@ namespace pico_ethernet {
 
 // Decides whether a received frame's destination address is accepted, mirroring
 // a real NIC's behavior driven by the host. The packet-filter bitmap comes from
-// CDC-ECM SetEthernetPacketFilter; the multicast list from
+// the host's SetEthernetPacketFilter request; the multicast list from
 // SetEthernetMulticastFilters. Until the host configures it, nothing is
 // accepted.
 class FrameFilter {
 public:
     static constexpr std::size_t MAX_MULTICAST{16};
 
-    // CDC-ECM Ethernet Packet Filter Bitmap (CDC ECM 1.2, Table 8).
+    // Ethernet Packet Filter Bitmap (CDC ECM 1.2, Table 8; reused by NCM).
     static constexpr std::uint16_t PROMISCUOUS{0x0001};
     static constexpr std::uint16_t ALL_MULTICAST{0x0002};
     static constexpr std::uint16_t DIRECTED{0x0004};
@@ -37,7 +37,7 @@ public:
     constexpr std::uint16_t packet_filter() const { return packet_filter_; }
 
     // Replace the subscribed multicast list. Addresses beyond MAX_MULTICAST are
-    // dropped; the host learns our capacity from the ECM functional descriptor's
+    // dropped; the host learns our capacity from the Ethernet Networking functional descriptor's
     // wNumberMCFilters and is expected to fall back to ALL_MULTICAST rather than
     // overflow, so truncation should not occur in practice.
     constexpr void set_multicast_list(std::span<const MacAddress> addresses) {

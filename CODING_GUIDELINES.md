@@ -201,7 +201,7 @@ cxx_flag = "-fno-rtti"
 | Element | Convention | Examples |
 |---------|------------|----------|
 | **Namespace** | Single flat namespace | `pico_ethernet` (no nested namespaces) |
-| **Classes/Structs** | `UpperCamelCase` | `MacAddress`, `CdcEcmDevice` |
+| **Classes/Structs** | `UpperCamelCase` | `MacAddress`, `UsbNetDevice` |
 | **Methods/Functions** | `snake_case` | `parse()`, `to_string()`, `initialize()` |
 | **Variables** | `snake_case` | `mac_address`, `config_`, `is_connected` |
 | **Constants** | `UPPER_SNAKE_CASE` | `DEFAULT_MAC`, `MAX_BUFFER_SIZE` |

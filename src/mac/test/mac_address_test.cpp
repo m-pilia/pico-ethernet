@@ -30,7 +30,7 @@ static_assert(make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}).is_broadcast());
 static_assert(!make_mac({0x01, 0x00, 0x5E, 0x00, 0x00, 0x01}).is_broadcast());
 static_assert(!MacAddress::generate_default().is_multicast());
 static_assert(!MacAddress::generate_default().is_broadcast());
-static_assert(MacAddress::generate_default().to_ecm_string()[0] == '0');
+static_assert(MacAddress::generate_default().to_imac_string()[0] == '0');
 static_assert(MacAddress::generate_default().to_string()[2] == ':');
 
 class MacAddressTest : public ::testing::Test {
@@ -104,19 +104,19 @@ TEST_F(MacAddressTest, to_string_uppercase_hex) {
     EXPECT_EQ(std::string_view(mac.to_string().data()), "AB:CD:EF:01:23:45");
 }
 
-TEST_F(MacAddressTest, to_ecm_string) {
+TEST_F(MacAddressTest, to_imac_string) {
     const auto mac = MacAddress::generate_default();
-    const auto ecm = mac.to_ecm_string();
+    const auto imac = mac.to_imac_string();
 
-    EXPECT_EQ(std::string(ecm.begin(), ecm.end()), "020000000001");
+    EXPECT_EQ(std::string(imac.begin(), imac.end()), "020000000001");
 }
 
-TEST_F(MacAddressTest, to_ecm_string_uppercase_hex) {
+TEST_F(MacAddressTest, to_imac_string_uppercase_hex) {
     const auto mac = make_mac({0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45});
-    const auto ecm = mac.to_ecm_string();
+    const auto imac = mac.to_imac_string();
 
     // 12 chars, uppercase, no separators.
-    EXPECT_EQ(std::string(ecm.begin(), ecm.end()), "ABCDEF012345");
+    EXPECT_EQ(std::string(imac.begin(), imac.end()), "ABCDEF012345");
 }
 
 TEST_F(MacAddressTest, parse_string) {

@@ -16,9 +16,9 @@ or with GROUP+MODE (works over ssh/headless, but requires adding the user to the
    SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="0001", MODE="0660", GROUP="plugdev"
 
 GET_ETHERNET_STATISTIC is directed at the CDC communications (control) interface
-(recipient = interface). Linux refuses such control transfers while cdc_ether owns
+(recipient = interface). Linux refuses such control transfers while cdc_ncm owns
 that interface (EBUSY / "Resource busy"), so we detach the kernel driver for the
-read and reattach it afterwards. Detaching briefly tears down the CDC-ECM netdev;
+read and reattach it afterwards. Detaching briefly tears down the CDC-NCM netdev;
 since the counters are cumulative, read them as a snapshot after a traffic run.
 """
 

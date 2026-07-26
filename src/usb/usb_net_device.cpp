@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Martino Pilia
 
-#include "src/usb/cdc_ecm_device.h"
+#include "src/usb/usb_net_device.h"
 
 #include <algorithm>
 #include <array>
@@ -35,7 +35,7 @@ constexpr std::uint8_t USB_IRQ_PRIORITY{0xC0};
 
 // The TinyUSB network callbacks have C linkage and no user-data argument, so the
 // active device is published here for them to forward to.
-CdcEcmDevice* g_instance{nullptr};
+UsbNetDevice* g_instance{nullptr};
 
 // Disables the USB controller interrupt for its scope. tud_task_ext() runs in that
 // interrupt, so any main-loop call into the TinyUSB net-driver API
@@ -54,12 +54,12 @@ class UsbInterruptLock {
 };
 } // namespace
 
-CdcEcmDevice::CdcEcmDevice(const MacAddress& mac_address, Phy& phy)
+UsbNetDevice::UsbNetDevice(const MacAddress& mac_address, Phy& phy)
     : mac_address_{mac_address},
       phy_{phy},
       filter_{mac_address} {}
 
-void CdcEcmDevice::initialize() {
+void UsbNetDevice::initialize() {
     g_instance = this;
 
     // TinyUSB reads tud_network_mac_address while building descriptors, so it
@@ -82,7 +82,7 @@ void CdcEcmDevice::initialize() {
     set_link_up(true);
 }
 
-void CdcEcmDevice::task() {
+void UsbNetDevice::task() {
     phy_.service();
 
     // Move host frames the USB ISR queued into the PHY transmit path.
@@ -91,35 +91,41 @@ void CdcEcmDevice::task() {
     // Mirror the interrupt-maintained pool-overflow counter into the RX stats.
     rx_stats_.pool_overflow = phy_.rx_pool_overflow();
 
-    // recover_frame (bit realignment + CRC scan) is the costly part of the receive
-    // path, so spend it only on a frame we can hand to USB right now. CDC-ECM keeps
-    // one frame in flight, so at most one is deliverable per lap anyway; recovering
-    // more just to drop them slows the loop and lets more captures overflow. Frames
-    // left in the pool are dropped cheaply in the capture interrupt (pool_overflow).
-    {
-        UsbInterruptLock lock;
-        if (!tud_network_can_xmit(MAX_FRAME_NO_FCS)) {
-            return;
+    // Drain recovered frames to the host, letting the NCM driver aggregate several
+    // datagrams into one NTB per USB transfer. recover_frame (bit realignment + CRC
+    // scan) is the costly part, so gate each recovery on being able to hand the frame
+    // to USB right now; stop as soon as the NTB path is full or the pool is empty.
+    // Frames left in the pool are dropped cheaply in the capture interrupt
+    // (pool_overflow).
+    for (;;) {
+        {
+            UsbInterruptLock lock;
+            if (!tud_network_can_xmit(MAX_FRAME_NO_FCS)) {
+                break;
+            }
         }
-    }
-    ++g_instrument.can_xmit_true; // TEMPORARY: M1.5 Step 1
-    const Phy::RxFrame received{phy_.poll_rx()};
-    switch (received.kind) {
-        case Phy::RxFrame::Kind::Frame:
-            deliver_to_host(received.frame);
+        ++g_instrument.can_xmit_true; // TEMPORARY: M1.5 Step 1
+        const Phy::RxFrame received{phy_.poll_rx()};
+        if (received.kind == Phy::RxFrame::Kind::None) {
             break;
-        case Phy::RxFrame::Kind::Glitch:
-            ++rx_stats_.carrier_glitch;
-            break;
-        case Phy::RxFrame::Kind::Error:
-            rx_stats_.record_error(received.error);
-            break;
-        case Phy::RxFrame::Kind::None:
-            break;
+        }
+        switch (received.kind) {
+            case Phy::RxFrame::Kind::Frame:
+                deliver_to_host(received.frame);
+                break;
+            case Phy::RxFrame::Kind::Glitch:
+                ++rx_stats_.carrier_glitch;
+                break;
+            case Phy::RxFrame::Kind::Error:
+                rx_stats_.record_error(received.error);
+                break;
+            case Phy::RxFrame::Kind::None:
+                break; // handled above
+        }
     }
 }
 
-void CdcEcmDevice::drain_usb_tx() {
+void UsbNetDevice::drain_usb_tx() {
     // Retry a frame held over from a full PHY TX queue.
     if (tx_backpressured_) {
         if (phy_.transmit(pending_tx_.view())) {
@@ -154,7 +160,7 @@ void CdcEcmDevice::drain_usb_tx() {
     }
 }
 
-void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
+void UsbNetDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
     // The PHY already byte-aligned and FCS-delimited the frame; only the
     // destination filter and FCS strip remain before handing it to the host.
     const std::span<const std::uint8_t> host_frame{frame.first(frame.size() - FCS_LEN)};
@@ -168,8 +174,9 @@ void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
         return;
     }
 
-    // CDC-ECM carries one frame in flight over Full Speed; if the previous transfer
-    // has not completed, this frame is a counted drop rather than a silent loss.
+    // NCM appends this frame as a datagram to the current NTB; tud_network_can_xmit
+    // reports whether it still fits the current (or a fresh) NTB. If not, it is a
+    // counted drop rather than a silent loss, and this lap's drain stops.
     if (!tud_network_can_xmit(static_cast<std::uint16_t>(host_frame.size()))) {
         ++rx_stats_.host_backpressure;
         return;
@@ -183,36 +190,44 @@ void CdcEcmDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
     ++rx_stats_.delivered;
 }
 
-void CdcEcmDevice::set_link_up(bool up) {
+void UsbNetDevice::set_link_up(bool up) {
     link_up_ = up;
     UsbInterruptLock lock;
     tud_network_link_state(USB_RHPORT, up);
 }
 
-bool CdcEcmDevice::on_frame_received(std::span<const std::uint8_t> host_frame) {
-    // ISR context. Copy the raw host frame into the SPSC queue for the main loop to
-    // build into a wire frame and transmit; always re-arm reception (return false).
-    // A frame that cannot fit a slot could never be framed either (build_frame
-    // rejects > MAX_FRAME_NO_FCS), so drop and count it rather than truncate. A full
-    // queue under load is likewise a visible counted drop, not a silent loss.
+bool UsbNetDevice::on_frame_received(std::span<const std::uint8_t> host_frame) {
+    // ISR context, NCM per-datagram callback. Copy the raw host frame into the SPSC
+    // queue for the main loop to build into a wire frame and transmit, then pump the
+    // next datagram of the NTB. Returning true tells the NCM driver the datagram was
+    // consumed (it advances); tud_network_recv_renew() drives the driver's own
+    // re-entrancy-safe loop through the rest of the NTB's datagrams.
+    //
+    // Both failure paths still count as consumed so the NTB keeps draining rather than
+    // stalling on a datagram we will never accept: a frame too large to ever be framed
+    // (larger than a wire frame can hold), and a full queue under load -- both are
+    // visible counted drops, not silent losses. These counters are ISR-owned
+    // (oversize_dropped, usb_tx_overflow), distinct from the main loop's build_failed,
+    // so every counter has a single writer (see TxStats).
     if (host_frame.size() > MAX_FRAME_NO_FCS) {
-        ++stats_.build_failed;
-        return false;
+        ++stats_.oversize_dropped;
+    } else {
+        const std::size_t head{usb_tx_head_.load(std::memory_order_relaxed)};
+        const std::size_t next{usb_tx_advance(head)};
+        if (next == usb_tx_tail_.load(std::memory_order_acquire)) {
+            ++stats_.usb_tx_overflow;
+        } else {
+            UsbTxSlot& slot{usb_tx_slots_[head]};
+            std::ranges::copy(host_frame, slot.data.begin());
+            slot.len = static_cast<std::uint16_t>(host_frame.size());
+            usb_tx_head_.store(next, std::memory_order_release);
+        }
     }
-    const std::size_t head{usb_tx_head_.load(std::memory_order_relaxed)};
-    const std::size_t next{usb_tx_advance(head)};
-    if (next == usb_tx_tail_.load(std::memory_order_acquire)) {
-        ++stats_.usb_tx_overflow;
-        return false;
-    }
-    UsbTxSlot& slot{usb_tx_slots_[head]};
-    std::ranges::copy(host_frame, slot.data.begin());
-    slot.len = static_cast<std::uint16_t>(host_frame.size());
-    usb_tx_head_.store(next, std::memory_order_release);
-    return false;
+    tud_network_recv_renew();
+    return true;
 }
 
-std::uint16_t CdcEcmDevice::on_frame_transmit(std::span<std::uint8_t> dst) {
+std::uint16_t UsbNetDevice::on_frame_transmit(std::span<std::uint8_t> dst) {
     if (pending_host_frame_.empty() || pending_host_frame_.size() > dst.size()) {
         return 0;
     }
@@ -220,7 +235,7 @@ std::uint16_t CdcEcmDevice::on_frame_transmit(std::span<std::uint8_t> dst) {
     return static_cast<std::uint16_t>(pending_host_frame_.size());
 }
 
-void CdcEcmDevice::on_multicast_filter(std::span<const std::uint8_t> addresses, std::uint16_t count) {
+void UsbNetDevice::on_multicast_filter(std::span<const std::uint8_t> addresses, std::uint16_t count) {
     const std::size_t n{std::min<std::size_t>(count, FrameFilter::MAX_MULTICAST)};
     std::array<MacAddress, FrameFilter::MAX_MULTICAST> list{};
     for (std::size_t i{0}; i < n; ++i) {
@@ -229,12 +244,15 @@ void CdcEcmDevice::on_multicast_filter(std::span<const std::uint8_t> addresses, 
     filter_.set_multicast_list(std::span(list).first(n));
 }
 
-void CdcEcmDevice::on_network_init() {
+void UsbNetDevice::on_network_init() {
     // The host reprograms the filter on bring-up; start from accept-nothing.
     filter_.set_packet_filter(0);
 }
 
-bool CdcEcmDevice::on_get_statistic(std::uint16_t selector, std::uint32_t& value) const {
+bool UsbNetDevice::on_get_statistic(std::uint16_t selector, std::uint32_t& value) const {
+    // Runs in the USB ISR. It reads stats_/rx_stats_ without a lock: every counter
+    // has a single writer (see TxStats), so each aligned 32-bit read is coherent.
+    //
     // TEMPORARY: M1.5 Step 1 diagnostics live in a private selector range that does
     // not overlap the standard/diagnostic selectors resolved below.
     if (const auto instrumented = instrument_statistic(selector)) {
@@ -257,7 +275,7 @@ extern "C" {
 // Shared USB controller interrupt handler: runs after TinyUSB's DCD handler
 // (highest order priority) has enqueued device events, and drains them through
 // tud_task_ext() so the device stack is serviced from the interrupt rather than the
-// main loop. Registered in CdcEcmDevice::initialize().
+// main loop. Registered in UsbNetDevice::initialize().
 void pico_ethernet_usb_irq_handler(void) {
     const pico_ethernet::InstrumentScope timer{pico_ethernet::g_instrument.tud_task}; // TEMPORARY: M1.5 Step 1
     tud_task_ext(0, true);
@@ -304,14 +322,6 @@ bool tud_network_get_statistic_cb(std::uint16_t feature_selector, std::uint32_t*
         return false;
     }
     return pico_ethernet::g_instance->on_get_statistic(feature_selector, *value);
-}
-
-// The combined ECM/RNDIS driver references this RNDIS handler, but we never
-// advertise RNDIS (ECM-only descriptors), so it is never called. Stubbing it
-// avoids compiling TinyUSB's rndis_reports.c, which depends on lwIP.
-void rndis_class_set_handler(std::uint8_t* data, int size) {
-    (void)data;
-    (void)size;
 }
 
 } // extern "C"

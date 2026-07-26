@@ -5,7 +5,7 @@
 
 #include "src/mac/mac_address.h"
 #include "src/phy/phy.h"
-#include "src/usb/cdc_ecm_device.h"
+#include "src/usb/usb_net_device.h"
 #include "src/util/instrumentation.h" // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics
 #include "src/util/led_heartbeat.h"
 
@@ -18,7 +18,7 @@ int main() {
     static pico_ethernet::Phy phy{};
     const bool phy_ok{phy.initialize()};
 
-    static pico_ethernet::CdcEcmDevice device{DEVICE_MAC, phy};
+    static pico_ethernet::UsbNetDevice device{DEVICE_MAC, phy};
     device.initialize();
 
     // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics. The DWT cycle counter must be

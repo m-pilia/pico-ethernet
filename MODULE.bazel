@@ -21,14 +21,12 @@ git_override(
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
 )
 
-# The Pico SDK bundles an older TinyUSB whose ECM driver lacks the link-state
+# The Pico SDK bundles an older TinyUSB whose NCM driver lacks the link-state
 # and Ethernet packet-filter callbacks we rely on. We instead fetch a newer
 # upstream TinyUSB that provides tud_network_link_state() and
 # tud_network_set_packet_filter_cb() natively, and point PICO_TINYUSB_LIB at it
-# (see .bazelrc). This replaces the former keep-in-sync pin plus local
-# link-state patch with stock upstream TinyUSB. The remaining local diffs add a
-# SetEthernetMulticastFilters callback and a GetEthernetStatistic handler the ECM
-# driver does not yet expose.
+# (see .bazelrc). The remaining local diffs add a SetEthernetMulticastFilters
+# callback and a GetEthernetStatistic handler the NCM driver does not yet expose.
 new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 
 new_git_repository(
@@ -37,8 +35,8 @@ new_git_repository(
     commit = "94d5e74f63d49131d733cc847f1aa71c558101ac",  # upstream master: native link-state + packet-filter callbacks
     patch_args = ["-p1"],
     patches = [
-        "//patches:tinyusb_ecm_multicast_filter.patch",
-        "//patches:tinyusb_ecm_statistics.patch",
+        "//patches:tinyusb_ncm_multicast_filter.patch",
+        "//patches:tinyusb_ncm_statistics.patch",
     ],
     remote = "https://github.com/hathach/tinyusb.git",
 )

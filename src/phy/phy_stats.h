@@ -12,18 +12,25 @@
 
 namespace pico_ethernet {
 
-// Transmit-side outcome counters.
+// Transmit-side outcome counters. Each field has a single writer so the reader in
+// the USB ISR (GET_ETHERNET_STATISTIC) needs no locking: accepted/build_failed are
+// written only on the main loop, usb_tx_overflow/oversize_dropped only in the USB
+// ISR (see UsbNetDevice). A naturally-aligned 32-bit counter with one writer is
+// read as a single coherent value on the Cortex-M33.
 struct TxStats {
-    std::uint32_t accepted{0};        // frames handed to the PHY
-    std::uint32_t build_failed{0};    // host frame too long to frame
-    std::uint32_t dropped_busy{0};    // PHY still transmitting a prior frame
-    std::uint32_t usb_tx_overflow{0}; // host frame dropped: USB->PHY queue full under load
+    std::uint32_t accepted{0};         // frames handed to the PHY
+    std::uint32_t build_failed{0};     // host frame could not be framed (main loop)
+    std::uint32_t dropped_busy{0};     // PHY still transmitting a prior frame
+    std::uint32_t usb_tx_overflow{0};  // host frame dropped: USB->PHY queue full under load (ISR)
+    std::uint32_t oversize_dropped{0}; // host datagram larger than a wire frame; dropped in the ISR
 };
 
 // Receive-side counters. The per-FrameError fields come out of the MAC parser
 // unchanged; decode_error and carrier_glitch are PHY-level events with no MAC
 // equivalent (a Manchester code violation, and carrier that never yielded a
-// deliverable frame).
+// deliverable frame). All fields are written only on the main loop and read by the
+// USB ISR (GET_ETHERNET_STATISTIC); single-writer aligned 32-bit access needs no
+// lock (see TxStats).
 struct RxStats {
     std::uint32_t delivered{0};
     std::uint32_t bad_preamble{0};
@@ -34,7 +41,7 @@ struct RxStats {
     std::uint32_t decode_error{0};
     std::uint32_t carrier_glitch{0};
     std::uint32_t pool_overflow{0};     // buffer pool exhausted; frame dropped under load
-    std::uint32_t host_backpressure{0}; // USB TX busy (CDC-ECM single frame in flight over FS)
+    std::uint32_t host_backpressure{0}; // USB TX busy (frame did not fit the current NCM NTB)
 
     constexpr void record_error(FrameError error) {
         switch (error) {
@@ -66,7 +73,7 @@ struct RxStats {
     }
 };
 
-// CDC ECM feature selectors for GetEthernetStatistic; one 32-bit counter is
+// CDC feature selectors for GetEthernetStatistic; one 32-bit counter is
 // returned per selector. Only the subset the device actually maintains is listed.
 enum class EthernetStatistic : std::uint16_t {
     XmitOk = 0x01,
@@ -106,7 +113,7 @@ ethernet_statistic(EthernetStatistic selector, const TxStats& tx, const RxStats&
         case EthernetStatistic::RcvOk:
             return rx.delivered;
         case EthernetStatistic::XmitError:
-            return tx.build_failed + tx.dropped_busy + tx.usb_tx_overflow;
+            return tx.build_failed + tx.dropped_busy + tx.usb_tx_overflow + tx.oversize_dropped;
         case EthernetStatistic::RcvError:
             return rx.error_total();
         case EthernetStatistic::RcvCrcError:

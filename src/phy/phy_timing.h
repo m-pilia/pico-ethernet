@@ -37,7 +37,7 @@ inline constexpr std::uint32_t LINK_LOSS_MAX_MS{150};
 // 50 ns half-bit is an integer number of PIO cycles: 120 MHz * 50 ns = 6 cycles.
 // A /1 PIO clock then places every symbol edge on an exact cycle boundary with no
 // fractional-divider jitter. The USB controller runs off the independent 48 MHz
-// USB PLL, so this does not disturb CDC-ECM.
+// USB PLL, so this does not disturb CDC-NCM.
 inline constexpr std::uint32_t SYS_CLOCK_HZ{120'000'000};
 inline constexpr std::uint32_t PIO_CYCLES_PER_HALF_BIT{
     static_cast<std::uint32_t>(static_cast<std::uint64_t>(SYS_CLOCK_HZ) * HALF_BIT_NS / 1'000'000'000)};

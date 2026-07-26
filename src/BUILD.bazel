@@ -7,7 +7,7 @@ cc_binary(
     deps = [
         "//src/mac:mac_address",
         "//src/phy:phy",
-        "//src/usb:cdc_ecm_device",
+        "//src/usb:usb_net_device",
         "//src/usb:usb_descriptors",
         "//src/util:instrumentation",  # TEMPORARY: M1.5 Step 1 diagnostics
         "//src/util:led_heartbeat",

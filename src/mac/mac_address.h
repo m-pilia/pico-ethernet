@@ -86,8 +86,8 @@ public:
         return out;
     }
 
-    // CDC-ECM iMACAddress string: 12 uppercase hex digits, no separators.
-    constexpr std::array<char, LENGTH * 2> to_ecm_string() const {
+    // CDC iMACAddress descriptor string: 12 uppercase hex digits, no separators.
+    constexpr std::array<char, LENGTH * 2> to_imac_string() const {
         std::array<char, LENGTH * 2> out{};
         for (std::size_t i{0}; i < LENGTH; ++i) {
             out[i * 2] = hex_char(address_[i] >> 4);

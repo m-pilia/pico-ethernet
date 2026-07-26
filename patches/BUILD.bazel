@@ -1,5 +1,5 @@
 exports_files([
     "tinyusb.BUILD",
-    "tinyusb_ecm_multicast_filter.patch",
-    "tinyusb_ecm_statistics.patch",
+    "tinyusb_ncm_multicast_filter.patch",
+    "tinyusb_ncm_statistics.patch",
 ])

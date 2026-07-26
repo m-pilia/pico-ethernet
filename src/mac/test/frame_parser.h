@@ -34,7 +34,7 @@ fcs_frame_length(std::span<const std::uint8_t> data, std::size_t min_len) {
 }
 
 // Parse a received wire frame (preamble + SFD + destination..payload + FCS) into
-// the host-facing frame (destination..payload, no FCS) to deliver over CDC-ECM.
+// the host-facing frame (destination..payload, no FCS) to deliver over CDC-NCM.
 // The returned span aliases `wire_frame`, which must outlive its use. All
 // failures are data errors (malformed/unwanted frames), reported via FrameError.
 [[nodiscard]] constexpr std::expected<std::span<const std::uint8_t>, FrameError>

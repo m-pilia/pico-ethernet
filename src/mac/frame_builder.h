@@ -16,7 +16,7 @@
 namespace pico_ethernet {
 
 // Build a wire frame from the host's Ethernet frame (destination..payload, no
-// FCS, as delivered over CDC-ECM): zero-pad short frames to the 60-byte
+// FCS, as delivered over CDC-NCM): zero-pad short frames to the 60-byte
 // minimum, append the CRC-32 FCS, and prepend the preamble and SFD.
 [[nodiscard]] constexpr std::expected<WireFrame, FrameError> build_frame(std::span<const std::uint8_t> host_frame) {
     if (host_frame.size() > MAX_FRAME_NO_FCS) {

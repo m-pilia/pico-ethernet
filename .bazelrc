@@ -18,8 +18,8 @@ build --extra_toolchains=@pico-sdk//bazel/toolchain:linux-x86_64-rp2350
 
 # RP2350 build config
 build:rp2350 --platforms=@pico-sdk//bazel/platform:rp2350
-# Use our patched TinyUSB (adds ECM link-state control; see MODULE.bazel) and
-# our TinyUSB config (enables the CDC-ECM net class).
+# Use our patched TinyUSB (adds multicast-filter + statistics callbacks; see
+# MODULE.bazel) and our TinyUSB config (enables the CDC-NCM net class).
 build:rp2350 --@pico-sdk//bazel/config:PICO_TINYUSB_LIB=@patched_tinyusb//:tinyusb
 build:rp2350 --@pico-sdk//bazel/config:PICO_TINYUSB_CONFIG=//src/usb:tusb_config
 build:rp2350 --aspects @pico-sdk//tools:uf2_aspect.bzl%pico_uf2_aspect

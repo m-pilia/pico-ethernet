@@ -34,9 +34,10 @@ extern "C" {
 #define CFG_TUD_ENDPOINT0_SIZE 64
 
 // Network class only. The net class has two drivers, ECM/RNDIS and NCM; we use
-// ECM (Linux binds cdc_ether natively). Exactly one must be enabled.
-#define CFG_TUD_ECM_RNDIS 1
-#define CFG_TUD_NCM 0
+// NCM (Linux binds cdc_ncm natively) for its NTB datagram aggregation. Exactly
+// one must be enabled. The NTB sizing knobs keep TinyUSB's ncm.h defaults.
+#define CFG_TUD_ECM_RNDIS 0
+#define CFG_TUD_NCM 1
 
 // Standard Ethernet MTU (frame payload up to 1514 bytes).
 #define CFG_TUD_NET_MTU 1514

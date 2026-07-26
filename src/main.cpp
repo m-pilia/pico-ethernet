@@ -6,6 +6,7 @@
 #include "src/mac/mac_address.h"
 #include "src/phy/phy.h"
 #include "src/usb/cdc_ecm_device.h"
+#include "src/util/instrumentation.h" // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics
 #include "src/util/led_heartbeat.h"
 
 int main() {
@@ -20,6 +21,10 @@ int main() {
     static pico_ethernet::CdcEcmDevice device{DEVICE_MAC, phy};
     device.initialize();
 
+    // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics. The DWT cycle counter must be
+    // armed after the final system clock is set (done in phy.initialize()).
+    pico_ethernet::instrument_init();
+
     pico_ethernet::LedHeartbeat led{LED_PIN};
     if (phy_ok) {
         led.good();
@@ -28,6 +33,7 @@ int main() {
     }
 
     while (true) {
+        ++pico_ethernet::g_instrument.main_loop_laps; // TEMPORARY: M1.5 Step 1
         device.task();
     }
 

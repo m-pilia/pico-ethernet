@@ -17,6 +17,7 @@
 #include "src/phy/rx_frame_recover.h"
 #include "src/phy/rx_pio_config.h"
 #include "src/phy/tx_emphasis.h"
+#include "src/util/instrumentation.h" // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics
 
 #include "rx.pio.h"
 #include "tx_emphasis.pio.h"
@@ -153,6 +154,9 @@ void Phy::rx_irq_handler(uint gpio, std::uint32_t events) {
 }
 
 void Phy::on_rx_eof() {
+    // TEMPORARY: M1.5 Step 1. Times every IRQ fire, including the spurious-edge and
+    // self-transmit early returns, so the count reflects the true IRQ load.
+    const InstrumentScope timer{g_instrument.rx_irq};
     if (gpio_get(pins_.rxc)) {
         return; // spurious edge (carrier envelope ripple); the frame is still live
     }
@@ -188,7 +192,10 @@ Phy::RxFrame Phy::poll_rx() {
     // bit-offset from the frame's.
     const std::span<const std::uint8_t> raw{
         reinterpret_cast<const std::uint8_t*>(rx_pool_[done->slot].data()), done->word_count * RX_OCTETS_PER_WORD};
-    const std::expected<std::size_t, FrameError> recovered{recover_frame(raw, rx_frame_)};
+    const std::expected<std::size_t, FrameError> recovered{[&] {
+        const InstrumentScope timer{g_instrument.recover_frame}; // TEMPORARY: M1.5 Step 1
+        return recover_frame(raw, rx_frame_);
+    }()};
     rx_ring_.release();
 
     if (!recovered) {

@@ -86,6 +86,7 @@ cc_library(
         ":tx_emphasis_pio",
         ":tx_level_pio",
         "//src/mac:ethernet_frame",
+        "//src/util:instrumentation",  # TEMPORARY: M1.5 Step 1 diagnostics
         "@pico-sdk//src/rp2_common/hardware_clocks",
         "@pico-sdk//src/rp2_common/hardware_dma",
         "@pico-sdk//src/rp2_common/hardware_gpio",

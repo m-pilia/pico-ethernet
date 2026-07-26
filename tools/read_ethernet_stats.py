@@ -53,6 +53,20 @@ SELECTORS = {
     0xF5: "  decode_error",
     0xF6: "  pool_overflow",
     0xF7: "  host_backpressure",
+    # TEMPORARY: MILESTONE 1.5 Step 1 instrumentation (see src/util/instrumentation.h).
+    # Removed together with the on-device module at the end of the milestone.
+    0xE0: "uptime_ms",
+    0xE1: "main_loop_laps",
+    0xE2: "can_xmit_true",
+    0xE3: "tud_task_count",
+    0xE4: "tud_task_avg_ns",
+    0xE5: "tud_task_worst_ns",
+    0xE6: "recover_frame_count",
+    0xE7: "recover_frame_avg_ns",
+    0xE8: "recover_frame_worst_ns",
+    0xE9: "rx_irq_count",
+    0xEA: "rx_irq_avg_ns",
+    0xEB: "rx_irq_worst_ns",
 }
 
 CDC_COMMUNICATIONS_CLASS = 0x02
@@ -77,6 +91,7 @@ def main():
     if reattach:
         dev.detach_kernel_driver(itf)
     usb.util.claim_interface(dev, itf)
+    values = {}
     try:
         for selector, label in SELECTORS.items():
             try:
@@ -84,10 +99,11 @@ def main():
                     BM_REQUEST_TYPE, GET_ETHERNET_STATISTIC, selector, itf, 4
                 )
             except usb.core.USBError as exc:
-                print(f"{label:<16} <unavailable> ({exc.strerror})", file=sys.stderr)
+                print(f"{label:<22} <unavailable> ({exc.strerror})", file=sys.stderr)
                 continue
             (value,) = struct.unpack("<I", bytes(data))
-            print(f"{label:<16} {value}")
+            values[selector] = value
+            print(f"{label:<22} {value}")
     finally:
         usb.util.release_interface(dev, itf)
         if reattach:
@@ -95,6 +111,21 @@ def main():
                 dev.attach_kernel_driver(itf)
             except usb.core.USBError:
                 pass
+
+    # TEMPORARY (MILESTONE 1.5 Step 1): derived per-second rates from the snapshot.
+    uptime_ms = values.get(0xE0, 0)
+    if uptime_ms:
+        secs = uptime_ms / 1000.0
+        print("\nderived (per second, cumulative since boot):")
+        for selector, label in (
+            (0xE1, "main_loop_laps/s"),
+            (0xE2, "can_xmit_true/s"),
+            (0x02, "rcv_ok/s"),
+            (0xE9, "rx_irq/s"),
+            (0xE6, "recover_frame/s"),
+        ):
+            if selector in values:
+                print(f"  {label:<20} {values[selector] / secs:,.0f}")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@
 
 #include "src/mac/ethernet_frame.h"
 #include "src/mac/frame_builder.h"
+#include "src/util/instrumentation.h" // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics
 
 #include "tusb.h"
 
@@ -45,7 +46,10 @@ void CdcEcmDevice::initialize() {
 }
 
 void CdcEcmDevice::task() {
-    tud_task();
+    {
+        const InstrumentScope timer{g_instrument.tud_task}; // TEMPORARY: M1.5 Step 1
+        tud_task();
+    }
     phy_.service();
 
     // Mirror the interrupt-maintained pool-overflow counter into the RX stats.
@@ -59,6 +63,7 @@ void CdcEcmDevice::task() {
     if (!tud_network_can_xmit(MAX_FRAME_NO_FCS)) {
         return;
     }
+    ++g_instrument.can_xmit_true; // TEMPORARY: M1.5 Step 1
     const Phy::RxFrame received{phy_.poll_rx()};
     switch (received.kind) {
         case Phy::RxFrame::Kind::Frame:
@@ -145,6 +150,12 @@ void CdcEcmDevice::on_network_init() {
 }
 
 bool CdcEcmDevice::on_get_statistic(std::uint16_t selector, std::uint32_t& value) const {
+    // TEMPORARY: M1.5 Step 1 diagnostics live in a private selector range that does
+    // not overlap the standard/diagnostic selectors resolved below.
+    if (const auto instrumented = instrument_statistic(selector)) {
+        value = *instrumented;
+        return true;
+    }
     const auto result = ethernet_statistic(selector, stats_, rx_stats_);
     if (!result) {
         return false;

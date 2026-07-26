@@ -170,10 +170,16 @@ void Phy::on_rx_eof() {
     // Half-duplex self-reception: while we transmit, our own signal is at our own
     // receiver. Don't enqueue it -- discard and keep capturing into the same slot.
     if (active_ || words == 0) {
+        if (active_) { // TEMPORARY: M1.5 Step 1 giant diagnosis
+            instrument_eof_active_discard();
+        } else {
+            instrument_eof_empty_discard();
+        }
         rearm_capture(rx_ring_.capture_slot());
         return;
     }
 
+    instrument_capture(words * RX_OCTETS_PER_WORD); // TEMPORARY: M1.5 Step 1
     // Hand the DMA a free buffer for the next frame and queue this one for the
     // main-loop drain. No parsing or copying here -- that is the drain's job.
     rearm_capture(rx_ring_.publish(words));
@@ -196,6 +202,11 @@ Phy::RxFrame Phy::poll_rx() {
         const InstrumentScope timer{g_instrument.recover_frame}; // TEMPORARY: M1.5 Step 1
         return recover_frame(raw, rx_frame_);
     }()};
+    // TEMPORARY: M1.5 Step 1. Classify giants before release(), while raw still
+    // owns the slot (release lets an IRQ re-arm the DMA into it).
+    if (!recovered && recovered.error() == FrameError::Giant) {
+        instrument_giant(raw);
+    }
     rx_ring_.release();
 
     if (!recovered) {

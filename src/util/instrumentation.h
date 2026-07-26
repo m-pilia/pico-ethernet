@@ -12,8 +12,11 @@
 #ifndef UTIL_INSTRUMENTATION_H
 #define UTIL_INSTRUMENTATION_H
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace pico_ethernet {
 
@@ -33,12 +36,25 @@ struct InstrumentStat {
     }
 };
 
+// Length buckets (bytes) for published captures, to see whether the wire delivers
+// frame-sized captures or full-buffer continuous-carrier merges. Thresholds:
+// [0,64) [64,256) [256,1024) [1024,1500) [1500,+): the top bucket is a capture
+// that (nearly) filled the DMA buffer, i.e. carrier never dropped.
+inline constexpr std::size_t CAPTURE_HIST_BUCKETS{5};
+
 struct InstrumentMetrics {
     InstrumentStat tud_task{};      // cost of servicing USB per lap
     InstrumentStat recover_frame{}; // cost of the bit-realign + CRC-scan pass
     InstrumentStat rx_irq{};        // cost of the end-of-frame IRQ (all fires)
     std::uint32_t main_loop_laps{0};
     std::uint32_t can_xmit_true{0}; // laps that observed the USB TX path open
+
+    // Giant diagnosis (Step 1).
+    std::array<std::uint32_t, CAPTURE_HIST_BUCKETS> capture_len_hist{};
+    std::uint32_t giant_one_sfd{0};   // giant capture with <=1 SFD pattern (noise/single)
+    std::uint32_t giant_multi_sfd{0}; // giant capture with >=2 SFD patterns (merge)
+    std::uint32_t eof_active_discard{0}; // EOF IRQ dropped: transmitting (self-reception)
+    std::uint32_t eof_empty_discard{0};  // EOF IRQ dropped: empty capture
 };
 
 // Written from both thread and IRQ context; read as a consistent snapshot under
@@ -81,7 +97,27 @@ enum class InstrumentSelector : std::uint16_t {
     RxIrqCount = 0xE9,
     RxIrqAvgNs = 0xEA,
     RxIrqWorstNs = 0xEB,
+    // Giant diagnosis (Step 1).
+    CaptureHist0 = 0xC0, // < 64 B
+    CaptureHist1 = 0xC1, // 64..255 B
+    CaptureHist2 = 0xC2, // 256..1023 B
+    CaptureHist3 = 0xC3, // 1024..1499 B
+    CaptureHist4 = 0xC4, // >= 1500 B (buffer near-full: continuous carrier)
+    GiantOneSfd = 0xC5,
+    GiantMultiSfd = 0xC6,
+    EofActiveDiscard = 0xC7,
+    EofEmptyDiscard = 0xC8,
 };
+
+// Records a published capture's length into the histogram (IRQ context).
+void instrument_capture(std::size_t bytes);
+
+// Classifies a giant capture by how many SFD patterns it contains (thread
+// context): >=2 indicates back-to-back frames merged into one capture.
+void instrument_giant(std::span<const std::uint8_t> raw);
+
+void instrument_eof_active_discard();
+void instrument_eof_empty_discard();
 
 [[nodiscard]] std::optional<std::uint32_t> instrument_statistic(std::uint16_t selector);
 

@@ -67,6 +67,16 @@ SELECTORS = {
     0xE9: "rx_irq_count",
     0xEA: "rx_irq_avg_ns",
     0xEB: "rx_irq_worst_ns",
+    # TEMPORARY: MILESTONE 1.5 Step 1 giant diagnosis.
+    0xC0: "capture_len_<64",
+    0xC1: "capture_len_64_255",
+    0xC2: "capture_len_256_1023",
+    0xC3: "capture_len_1024_1499",
+    0xC4: "capture_len_>=1500",
+    0xC5: "giant_one_sfd",
+    0xC6: "giant_multi_sfd",
+    0xC7: "eof_active_discard",
+    0xC8: "eof_empty_discard",
 }
 
 CDC_COMMUNICATIONS_CLASS = 0x02
@@ -126,6 +136,16 @@ def main():
         ):
             if selector in values:
                 print(f"  {label:<20} {values[selector] / secs:,.0f}")
+
+    # TEMPORARY (MILESTONE 1.5 Step 1): giant merge indicator.
+    one_sfd = values.get(0xC5, 0)
+    multi_sfd = values.get(0xC6, 0)
+    total_giants = one_sfd + multi_sfd
+    if total_giants:
+        print(
+            f"\ngiants: {multi_sfd} multi-SFD (likely merge) / {total_giants}"
+            f" = {100 * multi_sfd / total_giants:.0f}%"
+        )
 
 
 if __name__ == "__main__":

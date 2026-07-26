@@ -29,6 +29,11 @@ namespace {
 // The GPIO IRQ callback carries no user data, so the active PHY is published here
 // for the RXC end-of-frame trampoline to forward to.
 Phy* s_rx_irq_phy{nullptr};
+
+// TEMPORARY: M1.5 Step 1. Driven high for the duration of the EOF (falling-edge)
+// handler so a scope can compare when we actually service end-of-frame against the
+// RXC line. A free GPIO on the Pico 2 header.
+constexpr std::uint32_t DEBUG_RX_EOF_PIN{10};
 } // namespace
 
 Phy::Phy(const Pins& pins)
@@ -75,7 +80,14 @@ bool Phy::initialize() {
     // End of frame is the carrier (RXC) falling edge; finalize each frame there
     // instead of waiting for the main loop to come back around.
     s_rx_irq_phy = this;
-    gpio_set_irq_enabled_with_callback(pins_.rxc, GPIO_IRQ_EDGE_FALL, true, &Phy::rx_irq_handler);
+    // TEMPORARY: M1.5 Step 1. Also take the rising edge (never disabled) purely to
+    // count the true per-frame edge rate at the pin, independent of the EOF
+    // (falling-edge) servicing that the TX guard disables; and a scope marker pin.
+    gpio_init(DEBUG_RX_EOF_PIN);
+    gpio_set_dir(DEBUG_RX_EOF_PIN, GPIO_OUT);
+    gpio_put(DEBUG_RX_EOF_PIN, false);
+    gpio_set_irq_enabled_with_callback(
+        pins_.rxc, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &Phy::rx_irq_handler);
 
     nlp_alarm_ = add_alarm_in_ms(nlp_.next_interval_ms(), &Phy::nlp_alarm_cb, this, true);
     return true;
@@ -147,9 +159,15 @@ void Phy::rearm_capture(std::size_t slot) {
 
 void Phy::rx_irq_handler(uint gpio, std::uint32_t events) {
     (void)gpio;
-    (void)events;
-    if (s_rx_irq_phy != nullptr) {
+    // TEMPORARY: M1.5 Step 1. Count every rising edge (the true per-frame rate);
+    // this event is never disabled, unlike the falling-edge EOF servicing below.
+    if ((events & GPIO_IRQ_EDGE_RISE) != 0u) {
+        instrument_rxc_rise();
+    }
+    if ((events & GPIO_IRQ_EDGE_FALL) != 0u && s_rx_irq_phy != nullptr) {
+        gpio_put(DEBUG_RX_EOF_PIN, true); // TEMPORARY: M1.5 Step 1 scope marker
         s_rx_irq_phy->on_rx_eof();
+        gpio_put(DEBUG_RX_EOF_PIN, false);
     }
 }
 
@@ -262,6 +280,7 @@ bool Phy::transmit(std::span<const std::uint8_t> wire_frame) {
     // the end-of-frame IRQ. Suppress it for the whole transmit; service() discards
     // the self-received capture and re-enables once the line is idle again.
     gpio_set_irq_enabled(pins_.rxc, GPIO_IRQ_EDGE_FALL, false);
+    instrument_rxc_disabled_begin(); // TEMPORARY: M1.5 Step 1
     // Enable both SMs on the same cycle (phase-locked dividers), then kick both
     // DMA channels together. TXE-vs-polarity phase alignment is confirmed and
     // trimmed on-target by the DBG_PADOUT self-test.
@@ -289,6 +308,7 @@ void Phy::service() {
         rearm_capture(rx_ring_.capture_slot());
         gpio_acknowledge_irq(pins_.rxc, GPIO_IRQ_EDGE_FALL);
         gpio_set_irq_enabled(pins_.rxc, GPIO_IRQ_EDGE_FALL, true);
+        instrument_rxc_disabled_end(); // TEMPORARY: M1.5 Step 1
     }
 }
 

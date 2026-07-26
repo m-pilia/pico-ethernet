@@ -77,6 +77,10 @@ SELECTORS = {
     0xC6: "giant_multi_sfd",
     0xC7: "eof_active_discard",
     0xC8: "eof_empty_discard",
+    0xD0: "rxc_rise_count",
+    0xD1: "rxc_disabled_total_ms",
+    0xD2: "rxc_disable_windows",
+    0xD3: "rxc_disabled_worst_ns",
 }
 
 CDC_COMMUNICATIONS_CLASS = 0x02
@@ -133,6 +137,7 @@ def main():
             (0x02, "rcv_ok/s"),
             (0xE9, "rx_irq/s"),
             (0xE6, "recover_frame/s"),
+            (0xD0, "rxc_rise/s"),
         ):
             if selector in values:
                 print(f"  {label:<20} {values[selector] / secs:,.0f}")
@@ -145,6 +150,22 @@ def main():
         print(
             f"\ngiants: {multi_sfd} multi-SFD (likely merge) / {total_giants}"
             f" = {100 * multi_sfd / total_giants:.0f}%"
+        )
+
+    # TEMPORARY (Step 1): RXC edge-servicing. Rises = true per-frame edges at the
+    # pin; EOF-handler entries (rx_irq_count) = falling edges we actually serviced.
+    rise = values.get(0xD0, 0)
+    eof = values.get(0xE9, 0)
+    disabled_ms = values.get(0xD1, 0)
+    if rise:
+        print(
+            f"\nRXC edges: {rise} rises (pin) vs {eof} EOF-handler entries"
+            f" = {100 * eof / rise:.0f}% serviced"
+        )
+    if uptime_ms and disabled_ms:
+        print(
+            f"RXC EOF-IRQ disabled: {disabled_ms} / {uptime_ms} ms"
+            f" = {100 * disabled_ms / uptime_ms:.0f}% of uptime"
         )
 
 

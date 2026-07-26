@@ -55,6 +55,14 @@ struct InstrumentMetrics {
     std::uint32_t giant_multi_sfd{0}; // giant capture with >=2 SFD patterns (merge)
     std::uint32_t eof_active_discard{0}; // EOF IRQ dropped: transmitting (self-reception)
     std::uint32_t eof_empty_discard{0};  // EOF IRQ dropped: empty capture
+
+    // RXC edge-servicing diagnosis (Step 1 follow-up). rxc_rise_count is the raw
+    // per-frame edge rate at the pin (rising-edge IRQ, never disabled), to compare
+    // against the falling-edge EOF servicing (rx_irq) the TX guard disables.
+    std::uint32_t rxc_rise_count{0};
+    std::uint64_t rxc_disabled_total_cycles{0}; // time the EOF (fall) IRQ is off
+    std::uint32_t rxc_disable_windows{0};
+    std::uint32_t rxc_disabled_worst_cycles{0};
 };
 
 // Written from both thread and IRQ context; read as a consistent snapshot under
@@ -107,6 +115,11 @@ enum class InstrumentSelector : std::uint16_t {
     GiantMultiSfd = 0xC6,
     EofActiveDiscard = 0xC7,
     EofEmptyDiscard = 0xC8,
+    // RXC edge-servicing diagnosis (Step 1 follow-up).
+    RxcRiseCount = 0xD0,
+    RxcDisabledTotalMs = 0xD1,
+    RxcDisableWindows = 0xD2,
+    RxcDisabledWorstNs = 0xD3,
 };
 
 // Records a published capture's length into the histogram (IRQ context).
@@ -118,6 +131,14 @@ void instrument_giant(std::span<const std::uint8_t> raw);
 
 void instrument_eof_active_discard();
 void instrument_eof_empty_discard();
+
+// Raw RXC rising-edge count (IRQ context).
+void instrument_rxc_rise();
+
+// Bracket the window in which the RXC falling-edge (EOF) IRQ is disabled by the TX
+// self-reception guard: begin() at disable, end() at re-enable (both thread context).
+void instrument_rxc_disabled_begin();
+void instrument_rxc_disabled_end();
 
 [[nodiscard]] std::optional<std::uint32_t> instrument_statistic(std::uint16_t selector);
 

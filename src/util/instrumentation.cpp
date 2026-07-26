@@ -25,6 +25,12 @@ std::uint32_t cycles_to_ns(std::uint32_t cycles) {
     return static_cast<std::uint32_t>(static_cast<std::uint64_t>(cycles) * 1'000'000'000ull / SYS_CLOCK_HZ);
 }
 
+std::uint32_t cycles_to_ms(std::uint64_t cycles) {
+    return static_cast<std::uint32_t>(cycles / (SYS_CLOCK_HZ / 1000));
+}
+
+std::uint32_t s_rxc_disabled_since{0};
+
 std::uint32_t avg_ns(const InstrumentStat& stat) {
     if (stat.count == 0) {
         return 0;
@@ -73,6 +79,19 @@ void instrument_giant(std::span<const std::uint8_t> raw) {
 void instrument_eof_active_discard() { ++g_instrument.eof_active_discard; }
 
 void instrument_eof_empty_discard() { ++g_instrument.eof_empty_discard; }
+
+void instrument_rxc_rise() { ++g_instrument.rxc_rise_count; }
+
+void instrument_rxc_disabled_begin() { s_rxc_disabled_since = instrument_now_cycles(); }
+
+void instrument_rxc_disabled_end() {
+    const std::uint32_t elapsed{instrument_now_cycles() - s_rxc_disabled_since};
+    g_instrument.rxc_disabled_total_cycles += elapsed;
+    ++g_instrument.rxc_disable_windows;
+    if (elapsed > g_instrument.rxc_disabled_worst_cycles) {
+        g_instrument.rxc_disabled_worst_cycles = elapsed;
+    }
+}
 
 void instrument_init() {
     *reinterpret_cast<volatile std::uint32_t*>(DEMCR_ADDR) |= DEMCR_TRCENA;
@@ -131,6 +150,14 @@ std::optional<std::uint32_t> instrument_statistic(std::uint16_t selector) {
             return m.eof_active_discard;
         case InstrumentSelector::EofEmptyDiscard:
             return m.eof_empty_discard;
+        case InstrumentSelector::RxcRiseCount:
+            return m.rxc_rise_count;
+        case InstrumentSelector::RxcDisabledTotalMs:
+            return cycles_to_ms(m.rxc_disabled_total_cycles);
+        case InstrumentSelector::RxcDisableWindows:
+            return m.rxc_disable_windows;
+        case InstrumentSelector::RxcDisabledWorstNs:
+            return cycles_to_ns(m.rxc_disabled_worst_cycles);
     }
     return std::nullopt;
 }

@@ -51,8 +51,8 @@ struct InstrumentMetrics {
 
     // Giant diagnosis (Step 1).
     std::array<std::uint32_t, CAPTURE_HIST_BUCKETS> capture_len_hist{};
-    std::uint32_t giant_one_sfd{0};   // giant capture with <=1 SFD pattern (noise/single)
-    std::uint32_t giant_multi_sfd{0}; // giant capture with >=2 SFD patterns (merge)
+    std::uint32_t giant_one_sfd{0};      // giant capture with <=1 SFD pattern (noise/single)
+    std::uint32_t giant_multi_sfd{0};    // giant capture with >=2 SFD patterns (merge)
     std::uint32_t eof_active_discard{0}; // EOF IRQ dropped: transmitting (self-reception)
     std::uint32_t eof_empty_discard{0};  // EOF IRQ dropped: empty capture
 

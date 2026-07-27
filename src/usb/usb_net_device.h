@@ -102,9 +102,7 @@ class UsbNetDevice {
         std::uint16_t len{0};
     };
     static constexpr std::size_t USB_TX_QUEUE_SIZE{8};
-    static constexpr std::size_t usb_tx_advance(std::size_t i) {
-        return (i + 1 == USB_TX_QUEUE_SIZE) ? 0 : i + 1;
-    }
+    static constexpr std::size_t usb_tx_advance(std::size_t i) { return (i + 1 == USB_TX_QUEUE_SIZE) ? 0 : i + 1; }
     std::array<UsbTxSlot, USB_TX_QUEUE_SIZE> usb_tx_slots_{};
     std::atomic<std::size_t> usb_tx_head_{0};
     std::atomic<std::size_t> usb_tx_tail_{0};

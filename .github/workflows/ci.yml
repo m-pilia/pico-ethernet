@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bazelisk
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/bazelisk" \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64
+          chmod +x "$HOME/.local/bin/bazelisk"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Bazel
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazelisk
+          key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel.lock', '.bazelversion') }}
+          restore-keys: bazel-${{ runner.os }}-
+
+      - name: Host tests
+        run: bazelisk test //...
+
+      - name: Host tests (ASan)
+        run: bazelisk test --config=asan //...
+
+      - name: Host tests (UBSan)
+        run: bazelisk test --config=ubsan //...
+
+      - name: Host tests (MSan)
+        run: bazelisk test --config=msan //...
+
+      # The firmware build enforces the stack-usage budget and the stack guard
+      # and emits the flash/RAM usage report.
+      - name: Firmware build
+        run: bazelisk build --config=rp2350 //src:pico_ethernet_firmware
+
+      - name: Binary-size gate
+        run: bazelisk build --config=rp2350 //tools/checks:binary_size_gate
+
+      - name: No-dynamic-allocation gate
+        run: bazelisk build --config=rp2350 //tools/checks:no_alloc_gate
+
+      - name: clang-format
+        run: bazelisk run //tools/format:check

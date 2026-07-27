@@ -44,7 +44,10 @@ UsbNetDevice* g_instance{nullptr};
 // masks only USBCTRL_IRQ, so the PHY's real-time IRQs stay live while it is held.
 class UsbInterruptLock {
   public:
-    UsbInterruptLock() : was_enabled_{irq_is_enabled(USBCTRL_IRQ)} { irq_set_enabled(USBCTRL_IRQ, false); }
+    UsbInterruptLock()
+        : was_enabled_{irq_is_enabled(USBCTRL_IRQ)} {
+        irq_set_enabled(USBCTRL_IRQ, false);
+    }
     ~UsbInterruptLock() { irq_set_enabled(USBCTRL_IRQ, was_enabled_); }
     UsbInterruptLock(const UsbInterruptLock&) = delete;
     UsbInterruptLock& operator=(const UsbInterruptLock&) = delete;
@@ -72,8 +75,7 @@ void UsbNetDevice::initialize() {
     // handler at the highest order priority during tusb_init(); ours runs after it
     // (lowest order priority) and drains the queued events, so the net callbacks fire
     // in ISR context instead of from the main loop.
-    irq_add_shared_handler(USBCTRL_IRQ, &pico_ethernet_usb_irq_handler,
-                           PICO_SHARED_IRQ_HANDLER_LOWEST_ORDER_PRIORITY);
+    irq_add_shared_handler(USBCTRL_IRQ, &pico_ethernet_usb_irq_handler, PICO_SHARED_IRQ_HANDLER_LOWEST_ORDER_PRIORITY);
     irq_set_priority(USBCTRL_IRQ, USB_IRQ_PRIORITY);
 
     // Present the cable as connected so the host activates the data interface and

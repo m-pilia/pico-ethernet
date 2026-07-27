@@ -105,9 +105,7 @@ TEST(FrameFilterTest, MulticastListTruncatesAtCapacity) {
 
     std::array<MacAddress, FrameFilter::MAX_MULTICAST + 1> list{};
     for (std::size_t i{0}; i < list.size(); ++i) {
-        list[i] = make_mac({0x01, 0x00, 0x5E, 0x00,
-                            static_cast<std::uint8_t>(i >> 8),
-                            static_cast<std::uint8_t>(i)});
+        list[i] = make_mac({0x01, 0x00, 0x5E, 0x00, static_cast<std::uint8_t>(i >> 8), static_cast<std::uint8_t>(i)});
     }
     filter.set_multicast_list(list);
 

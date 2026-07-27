@@ -87,8 +87,7 @@ bool Phy::initialize() {
     gpio_init(DEBUG_RX_EOF_PIN);
     gpio_set_dir(DEBUG_RX_EOF_PIN, GPIO_OUT);
     gpio_put(DEBUG_RX_EOF_PIN, false);
-    gpio_set_irq_enabled_with_callback(
-        pins_.rxc, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &Phy::rx_irq_handler);
+    gpio_set_irq_enabled_with_callback(pins_.rxc, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &Phy::rx_irq_handler);
 
     // Finalize each transmit (idle drive + receiver re-arm) in the TX-DMA completion
     // interrupt so the receiver comes back the instant our frame drains, rather than

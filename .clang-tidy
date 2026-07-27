@@ -1,0 +1,17 @@
+Checks: >
+  bugprone-*,
+  clang-analyzer-*,
+  performance-*,
+  cppcoreguidelines-narrowing-conversions,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-slicing,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-branch-clone,
+  -performance-enum-size,
+  -*-magic-numbers,
+
+WarningsAsErrors: '*'
+
+HeaderFilterRegex: 'src/.*'
+
+FormatStyle: file

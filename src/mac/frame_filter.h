@@ -20,7 +20,7 @@ namespace pico_ethernet {
 // SetEthernetMulticastFilters. Until the host configures it, nothing is
 // accepted.
 class FrameFilter {
-public:
+  public:
     static constexpr std::size_t MAX_MULTICAST{16};
 
     // Ethernet Packet Filter Bitmap (CDC ECM 1.2, Table 8; reused by NCM).
@@ -48,19 +48,23 @@ public:
     }
 
     [[nodiscard]] constexpr bool accept(const MacAddress& dest) const {
-        if ((packet_filter_ & PROMISCUOUS) != 0) return true;
-        if (dest.is_broadcast()) return (packet_filter_ & BROADCAST) != 0;
+        if ((packet_filter_ & PROMISCUOUS) != 0)
+            return true;
+        if (dest.is_broadcast())
+            return (packet_filter_ & BROADCAST) != 0;
         if (dest.is_multicast()) {
-            if ((packet_filter_ & ALL_MULTICAST) != 0) return true;
+            if ((packet_filter_ & ALL_MULTICAST) != 0)
+                return true;
             return (packet_filter_ & MULTICAST) != 0 && is_subscribed(dest);
         }
         return (packet_filter_ & DIRECTED) != 0 && dest == our_address_;
     }
 
-private:
+  private:
     constexpr bool is_subscribed(const MacAddress& dest) const {
         for (std::size_t i{0}; i < multicast_count_; ++i) {
-            if (multicast_[i] == dest) return true;
+            if (multicast_[i] == dest)
+                return true;
         }
         return false;
     }

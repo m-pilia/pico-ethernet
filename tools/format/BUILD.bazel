@@ -1,0 +1,23 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+sh_binary(
+    name = "check",
+    srcs = ["clang_format.sh"],
+    args = [
+        "$(rlocationpath @llvm_toolchain//:clang-format)",
+        "check",
+    ],
+    data = ["@llvm_toolchain//:clang-format"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_binary(
+    name = "fix",
+    srcs = ["clang_format.sh"],
+    args = [
+        "$(rlocationpath @llvm_toolchain//:clang-format)",
+        "fix",
+    ],
+    data = ["@llvm_toolchain//:clang-format"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)

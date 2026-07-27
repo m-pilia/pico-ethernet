@@ -19,7 +19,7 @@ namespace pico_ethernet {
 // The default address 02:00:00:00:00:01 is locally administered (bit 1 of the
 // first octet set) and unicast (bit 0 clear).
 class MacAddress {
-public:
+  public:
     static constexpr std::size_t LENGTH{6};
     using Bytes = std::array<std::uint8_t, LENGTH>;
 
@@ -47,20 +47,24 @@ public:
     static constexpr std::optional<MacAddress> parse(std::string_view str) {
         Bytes out{};
 
-        if (str.size() == LENGTH * 2) {  // no separators: 12 hex digits
+        if (str.size() == LENGTH * 2) { // no separators: 12 hex digits
             for (std::size_t i{0}; i < LENGTH; ++i) {
-                if (!parse_octet(str.substr(i * 2, 2), out[i])) return std::nullopt;
+                if (!parse_octet(str.substr(i * 2, 2), out[i]))
+                    return std::nullopt;
             }
             return MacAddress(out);
         }
 
-        if (str.size() == LENGTH * 3 - 1) {  // six octets joined by five separators
+        if (str.size() == LENGTH * 3 - 1) { // six octets joined by five separators
             const char sep{str[2]};
-            if (sep != ':' && sep != '-' && sep != '.') return std::nullopt;
+            if (sep != ':' && sep != '-' && sep != '.')
+                return std::nullopt;
             for (std::size_t i{0}; i < LENGTH; ++i) {
                 const std::size_t pos{i * 3};
-                if (i + 1 < LENGTH && str[pos + 2] != sep) return std::nullopt;
-                if (!parse_octet(str.substr(pos, 2), out[i])) return std::nullopt;
+                if (i + 1 < LENGTH && str[pos + 2] != sep)
+                    return std::nullopt;
+                if (!parse_octet(str.substr(pos, 2), out[i]))
+                    return std::nullopt;
             }
             return MacAddress(out);
         }
@@ -103,7 +107,8 @@ public:
     // The broadcast address (all ones), a special case of a group address.
     constexpr bool is_broadcast() const {
         for (const std::uint8_t octet : address_) {
-            if (octet != 0xFF) return false;
+            if (octet != 0xFF)
+                return false;
         }
         return true;
     }
@@ -114,26 +119,28 @@ public:
     constexpr const std::uint8_t* end() const { return address_.data() + address_.size(); }
     constexpr std::size_t size() const { return address_.size(); }
 
-private:
+  private:
     // Low nibble of `value` as an uppercase hex digit.
-    static constexpr char hex_char(std::uint8_t value) {
-        return "0123456789ABCDEF"[value & 0x0F];
-    }
+    static constexpr char hex_char(std::uint8_t value) { return "0123456789ABCDEF"[value & 0x0F]; }
 
     // Parse exactly two hex digits into `out`; false if not two hex digits.
     static constexpr bool parse_octet(std::string_view pair, std::uint8_t& out) {
         assert(pair.size() == 2);
         const auto hi = hex_digit(pair[0]);
         const auto lo = hex_digit(pair[1]);
-        if (!hi || !lo) return false;
+        if (!hi || !lo)
+            return false;
         out = static_cast<std::uint8_t>((*hi << 4) | *lo);
         return true;
     }
 
     static constexpr std::optional<std::uint8_t> hex_digit(char c) {
-        if (c >= '0' && c <= '9') return static_cast<std::uint8_t>(c - '0');
-        if (c >= 'a' && c <= 'f') return static_cast<std::uint8_t>(c - 'a' + 10);
-        if (c >= 'A' && c <= 'F') return static_cast<std::uint8_t>(c - 'A' + 10);
+        if (c >= '0' && c <= '9')
+            return static_cast<std::uint8_t>(c - '0');
+        if (c >= 'a' && c <= 'f')
+            return static_cast<std::uint8_t>(c - 'a' + 10);
+        if (c >= 'A' && c <= 'F')
+            return static_cast<std::uint8_t>(c - 'A' + 10);
         return std::nullopt;
     }
 

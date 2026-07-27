@@ -1,0 +1,58 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+
+py_binary(
+    name = "binary_size_check",
+    srcs = ["binary_size_check.py"],
+    legacy_create_init = 0,
+    visibility = ["//visibility:private"],
+)
+
+py_binary(
+    name = "no_alloc_check",
+    srcs = ["no_alloc_check.py"],
+    legacy_create_init = 0,
+    visibility = ["//visibility:private"],
+)
+
+# Built under --config=rp2350 so the firmware dep is the arm ELF; the tools run
+# in the exec (host) configuration.
+genrule(
+    name = "binary_size_gate",
+    srcs = [
+        "//src:pico_ethernet_firmware",
+        "firmware_size_baseline.json",
+    ],
+    outs = ["binary_size_gate.stamp"],
+    cmd = "$(execpath :binary_size_check)" +
+          " --objdump $(execpath @llvm_toolchain//:bin/llvm-objdump)" +
+          " --elf $(execpath //src:pico_ethernet_firmware)" +
+          " --baseline $(execpath firmware_size_baseline.json)" +
+          " --max-increase-pct 5" +
+          " --stamp $@",
+    tools = [
+        ":binary_size_check",
+        "@llvm_toolchain//:bin/llvm-objdump",
+    ],
+)
+
+# Scoped to first-party archives (the SDK/newlib legitimately allocate). Built
+# under --config=rp2350 so the archives are the arm objects.
+genrule(
+    name = "no_alloc_gate",
+    srcs = [
+        "//src/phy:phy",
+        "//src/phy:tx_emphasis",
+        "//src/usb:usb_net_device",
+        "//src/usb:usb_descriptors",
+        "//src/util:instrumentation",
+    ],
+    outs = ["no_alloc_gate.stamp"],
+    cmd = "$(execpath :no_alloc_check)" +
+          " --nm $(execpath @llvm_toolchain//:bin/llvm-nm)" +
+          " --archives $(SRCS)" +
+          " --stamp $@",
+    tools = [
+        ":no_alloc_check",
+        "@llvm_toolchain//:bin/llvm-nm",
+    ],
+)

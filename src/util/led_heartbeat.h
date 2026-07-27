@@ -55,8 +55,7 @@ class LedHeartbeat {
         }
         interval_ms_ = interval_ms;
         cancel();
-        add_repeating_timer_ms(
-            interval_ms_, &LedHeartbeat::on_timer, this, &timer_);
+        add_repeating_timer_ms(interval_ms_, &LedHeartbeat::on_timer, this, &timer_);
         running_ = true;
     }
 

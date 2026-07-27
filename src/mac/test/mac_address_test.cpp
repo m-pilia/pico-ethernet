@@ -34,7 +34,7 @@ static_assert(MacAddress::generate_default().to_imac_string()[0] == '0');
 static_assert(MacAddress::generate_default().to_string()[2] == ':');
 
 class MacAddressTest : public ::testing::Test {
-protected:
+  protected:
     void SetUp() override {}
     void TearDown() override {}
 };
@@ -48,7 +48,7 @@ TEST_F(MacAddressTest, default_generation) {
 TEST_F(MacAddressTest, default_constructed_is_all_zero) {
     const MacAddress mac{};
 
-    EXPECT_EQ(mac.bytes(), MacAddress::Bytes{});  // 00:00:00:00:00:00
+    EXPECT_EQ(mac.bytes(), MacAddress::Bytes{}); // 00:00:00:00:00:00
     EXPECT_NE(mac, MacAddress::generate_default());
     EXPECT_FALSE(mac.is_multicast());
 }
@@ -81,10 +81,8 @@ TEST_F(MacAddressTest, byte_out_of_range_asserts) {
 
 TEST_F(MacAddressTest, construction_from_span) {
     // Extract a MAC from the first six octets of a larger buffer.
-    const std::array<std::uint8_t, 8> frame = {0x02, 0x00, 0x00, 0x00,
-                                          0x00, 0x01, 0xAA, 0xBB};
-    const auto mac = MacAddress(std::span<const std::uint8_t, MacAddress::LENGTH>(
-        frame.data(), MacAddress::LENGTH));
+    const std::array<std::uint8_t, 8> frame = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0xAA, 0xBB};
+    const auto mac = MacAddress(std::span<const std::uint8_t, MacAddress::LENGTH>(frame.data(), MacAddress::LENGTH));
 
     EXPECT_EQ(mac, MacAddress::generate_default());
 }
@@ -142,9 +140,8 @@ TEST_F(MacAddressTest, parse_case_insensitive) {
     // case (separated and not) must all yield the same address.
     const auto expected = make_mac({0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45});
 
-    for (const std::string_view str : {"ab:cd:ef:01:23:45", "AB:CD:EF:01:23:45",
-                                       "aB:Cd:eF:01:23:45", "abcdef012345",
-                                       "ABCDEF012345"}) {
+    for (const std::string_view str :
+         {"ab:cd:ef:01:23:45", "AB:CD:EF:01:23:45", "aB:Cd:eF:01:23:45", "abcdef012345", "ABCDEF012345"}) {
         const auto mac = MacAddress::parse(str);
         ASSERT_TRUE(mac.has_value()) << str;
         EXPECT_EQ(*mac, expected) << str;
@@ -152,12 +149,12 @@ TEST_F(MacAddressTest, parse_case_insensitive) {
 }
 
 TEST_F(MacAddressTest, parse_invalid) {
-    EXPECT_FALSE(MacAddress::parse("").has_value());                    // empty
-    EXPECT_FALSE(MacAddress::parse("02:00:00").has_value());            // too short
+    EXPECT_FALSE(MacAddress::parse("").has_value());                     // empty
+    EXPECT_FALSE(MacAddress::parse("02:00:00").has_value());             // too short
     EXPECT_FALSE(MacAddress::parse("02:00:00:00:00:01:02").has_value()); // too long
-    EXPECT_FALSE(MacAddress::parse("02:0:00:00:00:01").has_value());    // ragged group
-    EXPECT_FALSE(MacAddress::parse("GG:00:00:00:00:01").has_value());   // bad hex (sep form)
-    EXPECT_FALSE(MacAddress::parse("0200000000GG").has_value());        // bad hex (12-char form)
+    EXPECT_FALSE(MacAddress::parse("02:0:00:00:00:01").has_value());     // ragged group
+    EXPECT_FALSE(MacAddress::parse("GG:00:00:00:00:01").has_value());    // bad hex (sep form)
+    EXPECT_FALSE(MacAddress::parse("0200000000GG").has_value());         // bad hex (12-char form)
 }
 
 TEST_F(MacAddressTest, parse_rejects_inconsistent_separator) {

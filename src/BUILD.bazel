@@ -4,6 +4,7 @@ cc_binary(
     name = "pico_ethernet_firmware",
     srcs = ["main.cpp"],
     linkopts = ["-Wl,--gc-sections"],
+    visibility = ["//tools/checks:__pkg__"],
     deps = [
         "//src/mac:mac_address",
         "//src/phy:phy",

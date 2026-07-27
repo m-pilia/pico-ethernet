@@ -25,9 +25,7 @@ std::uint32_t cycles_to_ns(std::uint32_t cycles) {
     return static_cast<std::uint32_t>(static_cast<std::uint64_t>(cycles) * 1'000'000'000ull / SYS_CLOCK_HZ);
 }
 
-std::uint32_t cycles_to_ms(std::uint64_t cycles) {
-    return static_cast<std::uint32_t>(cycles / (SYS_CLOCK_HZ / 1000));
-}
+std::uint32_t cycles_to_ms(std::uint64_t cycles) { return static_cast<std::uint32_t>(cycles / (SYS_CLOCK_HZ / 1000)); }
 
 std::uint32_t s_rxc_disabled_since{0};
 

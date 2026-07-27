@@ -15,19 +15,14 @@ namespace pico_ethernet {
 // "123456789" is the canonical CRC-32/ISO-HDLC check vector; its FCS is a
 // well-known constant, which pins both the polynomial and the reflect/invert
 // convention.
-constexpr std::array<std::uint8_t, 9> CHECK_INPUT{'1', '2', '3', '4',
-                                                  '5', '6', '7', '8', '9'};
+constexpr std::array<std::uint8_t, 9> CHECK_INPUT{'1', '2', '3', '4', '5', '6', '7', '8', '9'};
 
 static_assert(crc32(CHECK_INPUT) == 0xCBF43926u);
 static_assert(crc32(std::span<const std::uint8_t>{}) == 0u);
 
-TEST(Crc32Test, CanonicalCheckVector) {
-    EXPECT_EQ(crc32(CHECK_INPUT), 0xCBF43926u);
-}
+TEST(Crc32Test, CanonicalCheckVector) { EXPECT_EQ(crc32(CHECK_INPUT), 0xCBF43926u); }
 
-TEST(Crc32Test, EmptyInputIsZero) {
-    EXPECT_EQ(crc32(std::span<const std::uint8_t>{}), 0u);
-}
+TEST(Crc32Test, EmptyInputIsZero) { EXPECT_EQ(crc32(std::span<const std::uint8_t>{}), 0u); }
 
 // Appending a frame's own (little-endian) FCS and re-running the CRC yields the
 // fixed residual 0x2144DF1C — the property the receiver uses to validate a frame

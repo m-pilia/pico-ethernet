@@ -13,9 +13,11 @@
 namespace pico_ethernet {
 
 constexpr std::array<std::uint8_t, MAC_HEADER_LEN> HEADER{
+    // clang-format off
     0x02, 0x00, 0x00, 0x00, 0x00, 0x01,  // destination
     0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,  // source
     0x08, 0x00,                          // EtherType (IPv4)
+    // clang-format on
 };
 
 constexpr MacAddress make_mac(MacAddress::Bytes bytes) {

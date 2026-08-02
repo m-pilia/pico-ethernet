@@ -13,7 +13,7 @@
 #include <gtest/gtest.h>
 
 #include "src/mac/ethernet_frame.h"
-#include "src/mac/frame_builder.h"
+#include "src/mac/test/frame_builder_by_value.h"
 
 namespace pico_ethernet {
 namespace {

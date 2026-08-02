@@ -11,9 +11,9 @@
 #include <vector>
 
 #include "src/mac/ethernet_frame.h"
-#include "src/mac/frame_builder.h"
 #include "src/mac/frame_filter.h"
 #include "src/mac/mac_address.h"
+#include "src/mac/test/frame_builder_by_value.h"
 #include "src/mac/test/frame_parser.h"
 
 namespace pico_ethernet {

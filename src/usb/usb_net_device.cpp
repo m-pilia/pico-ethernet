@@ -138,25 +138,30 @@ void UsbNetDevice::drain_usb_tx() {
         }
     }
 
-    // Frame and transmit what the ISR queued. The slot is released (tail advanced)
-    // before the PHY transmit, since the wire frame has already been copied out into
-    // build_frame's result, so the ISR is free to reuse the slot immediately.
+    // Frame and transmit what the ISR queued, building each wire frame directly
+    // into pending_tx_ to keep the ~1.5 KB WireFrame off this function's stack.
+    //
+    // Reusing pending_tx_ as the build scratch is safe without a lock: it and
+    // tx_backpressured_ are touched only by drain_usb_tx(), which runs solely
+    // from the main-loop task() (single writer, single reader). The USB ISR only
+    // produces into the usb_tx_slots_ ring via the head/tail atomics (SPSC) and
+    // never accesses pending_tx_. The slot is released (tail advanced) once
+    // build_frame has copied its bytes out, so the ISR may reuse it immediately.
     for (;;) {
         const std::size_t tail{usb_tx_tail_.load(std::memory_order_relaxed)};
         if (tail == usb_tx_head_.load(std::memory_order_acquire)) {
             return; // queue empty
         }
         const std::span<const std::uint8_t> raw{usb_tx_slots_[tail].data.data(), usb_tx_slots_[tail].len};
-        const auto built{build_frame(raw)};
+        const auto result{build_frame(raw, pending_tx_)};
         usb_tx_tail_.store(usb_tx_advance(tail), std::memory_order_release);
-        if (!built) {
+        if (!result) {
             ++stats_.build_failed;
             continue;
         }
-        if (!phy_.transmit(built->view())) {
-            pending_tx_ = *built;
+        if (!phy_.transmit(pending_tx_.view())) {
             tx_backpressured_ = true;
-            return; // PHY TX full; hold this frame, stop draining
+            return; // PHY TX full; pending_tx_ already holds the frame, stop draining
         }
         ++stats_.accepted;
     }

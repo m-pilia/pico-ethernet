@@ -13,4 +13,5 @@ bazelisk build --config=rp2350 //src:pico_ethernet_firmware
 bazelisk build --config=rp2350 //tools/checks:binary_size_gate
 bazelisk build --config=rp2350 //tools/checks:no_alloc_gate
 bazelisk run //tools/format:check
+bazelisk run //tools/format:fix
 ./tools/tidy/check.sh

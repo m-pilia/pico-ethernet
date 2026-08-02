@@ -12,6 +12,17 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "frame_builder_by_value",
+    testonly = True,
+    hdrs = ["frame_builder_by_value.h"],
+    visibility = ["//src/phy/test:__pkg__"],
+    deps = [
+        "//src/mac:ethernet_frame",
+        "//src/mac:frame_builder",
+    ],
+)
+
 cc_test(
     name = "mac_address_test",
     srcs = ["mac_address_test.cpp"],
@@ -54,7 +65,7 @@ cc_test(
         "@googletest//:gtest_main",
         "//src/mac:crc32",
         "//src/mac:ethernet_frame",
-        "//src/mac:frame_builder",
+        ":frame_builder_by_value",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )
@@ -78,9 +89,9 @@ cc_test(
         "@googletest//:gtest",
         "@googletest//:gtest_main",
         "//src/mac:ethernet_frame",
-        "//src/mac:frame_builder",
         "//src/mac:frame_filter",
         "//src/mac:mac_address",
+        ":frame_builder_by_value",
         ":frame_parser",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],

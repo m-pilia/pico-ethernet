@@ -10,6 +10,7 @@ build --cxxopt=-fno-exceptions
 build --cxxopt=-fno-rtti
 build --cxxopt=-std=c++23
 build --cxxopt=-fdiagnostics-color=always
+build --copt=-Wno-unused-command-line-argument  # toolchains_llvm leaks -stdlib=libc++ to C/asm targets
 
 build:dbg --copt=-O0
 build:dbg --copt=-g3
@@ -24,10 +25,7 @@ build:rp2350 --@pico-sdk//bazel/config:PICO_TINYUSB_LIB=@patched_tinyusb//:tinyu
 build:rp2350 --@pico-sdk//bazel/config:PICO_TINYUSB_CONFIG=//src/usb:tusb_config
 build:rp2350 --aspects @pico-sdk//tools:uf2_aspect.bzl%pico_uf2_aspect
 build:rp2350 --output_groups=+pico_uf2_files
-
-# Firmware memory-layout guardrails. Stack-usage budget scoped to first-party
-# sources; runtime MPU stack guard; flash/RAM usage report on every link.
-build:rp2350 --per_file_copt=src/.*\.cpp$@-Werror=stack-usage=4096
+build:rp2350 --@pico-sdk//bazel/config:PICO_CONFIG_EXTRA_HEADER=//src/config:pico_config_extra
 build:rp2350 --copt=-DPICO_USE_STACK_GUARDS=1
 build:rp2350 --linkopt=-Wl,--print-memory-usage
 

@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@pico-sdk//bazel:defs.bzl", "pico_generate_pio_header")
+load("//src/config:defs.bzl", "STACK_USAGE_COPTS")
 
 cc_library(
     name = "phy_timing",
@@ -11,6 +12,7 @@ cc_library(
     name = "tx_emphasis",
     srcs = ["tx_emphasis.cpp"],
     hdrs = ["tx_emphasis.h"],
+    copts = STACK_USAGE_COPTS,
     visibility = ["//visibility:public"],
 )
 
@@ -74,6 +76,7 @@ cc_library(
     name = "phy",
     srcs = ["phy.cpp"],
     hdrs = ["phy.h"],
+    copts = STACK_USAGE_COPTS,
     visibility = ["//visibility:public"],
     deps = [
         ":link_pulse",

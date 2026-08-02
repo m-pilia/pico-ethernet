@@ -16,16 +16,21 @@
 namespace pico_ethernet {
 
 // Build a wire frame from the host's Ethernet frame (destination..payload, no
-// FCS, as delivered over CDC-NCM): zero-pad short frames to the 60-byte
-// minimum, append the CRC-32 FCS, and prepend the preamble and SFD.
-[[nodiscard]] constexpr std::expected<WireFrame, FrameError> build_frame(std::span<const std::uint8_t> host_frame) {
+// FCS, as delivered over CDC-NCM) into the caller-provided `out`: zero-pad short
+// frames to the 60-byte minimum, append the CRC-32 FCS, and prepend the preamble
+// and SFD. Taking `out` by reference (rather than returning a ~1.5 KB WireFrame
+// by value) keeps the large frame buffer off the caller's stack.
+[[nodiscard]] constexpr std::expected<void, FrameError>
+build_frame(std::span<const std::uint8_t> host_frame, WireFrame& out) {
     if (host_frame.size() > MAX_FRAME_NO_FCS) {
         return std::unexpected(FrameError::TooLong);
     }
 
     const std::size_t frame_len{std::max(host_frame.size(), MIN_FRAME_NO_FCS)};
 
-    WireFrame out{};
+    // Clear in place; assigning a fresh WireFrame{} would put a temporary on the
+    // stack, defeating the point of the out-parameter.
+    out.bytes.fill(0);
     std::size_t pos{0};
 
     for (std::size_t i{0}; i < PREAMBLE_LEN; ++i) {
@@ -48,7 +53,7 @@ namespace pico_ethernet {
     pos += 4;
 
     out.length = pos;
-    return out;
+    return {};
 }
 
 } // namespace pico_ethernet

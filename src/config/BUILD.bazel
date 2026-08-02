@@ -1,0 +1,16 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load(":defs.bzl", "PICO_STACK_SIZE_BYTES")
+
+# The Pico SDK expects the file to be named pico_config_extra_headers.h
+genrule(
+    name = "pico_config_extra_headers_gen",
+    outs = ["pico_config_extra_headers.h"],
+    cmd = "echo '#define PICO_STACK_SIZE {}' > $@".format(PICO_STACK_SIZE_BYTES),
+)
+
+cc_library(
+    name = "pico_config_extra",
+    hdrs = ["pico_config_extra_headers.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)

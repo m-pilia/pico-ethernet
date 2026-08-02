@@ -40,8 +40,6 @@ jobs:
       - name: Host tests (MSan)
         run: bazelisk test --config=msan //...
 
-      # The firmware build enforces the stack-usage budget and the stack guard
-      # and emits the flash/RAM usage report.
       - name: Firmware build
         run: bazelisk build --config=rp2350 //src:pico_ethernet_firmware
 
@@ -53,3 +51,6 @@ jobs:
 
       - name: clang-format
         run: bazelisk run //tools/format:check
+
+      - name: clang-tidy
+        run: ./tools/tidy/check.sh

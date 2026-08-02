@@ -51,6 +51,9 @@ build:msan --copt=-g
 build:msan --strip=never
 build:msan --test_env=MSAN_OPTIONS=halt_on_error=1
 
+build:tidy --aspects=//tools/tidy:tidy.bzl%clang_tidy_aspect
+build:tidy --output_groups=report
+
 test --test_output=errors
 
 # Suppress warnings from third party code

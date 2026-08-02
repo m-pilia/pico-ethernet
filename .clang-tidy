@@ -8,6 +8,7 @@ Checks: >
   -bugprone-easily-swappable-parameters,
   -bugprone-branch-clone,
   -performance-enum-size,
+  -performance-no-int-to-ptr,
   -*-magic-numbers,
 
 WarningsAsErrors: '*'

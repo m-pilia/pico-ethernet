@@ -1,5 +1,4 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//src/config:defs.bzl", "STACK_USAGE_COPTS")
 
 cc_library(
     name = "led_heartbeat",
@@ -13,7 +12,6 @@ cc_library(
     name = "instrumentation",
     srcs = ["instrumentation.cpp"],
     hdrs = ["instrumentation.h"],
-    copts = STACK_USAGE_COPTS,
     visibility = ["//visibility:public"],
     deps = [
         "//src/phy:phy_timing",

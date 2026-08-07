@@ -83,7 +83,7 @@ std::size_t pack_stimulus(
     bool corrupt,
     std::size_t lead_bits = 0,
     std::size_t trail_bits = 0) {
-    std::array<HalfBit, MAX_HALFBITS> halfbits{};
+    static std::array<HalfBit, MAX_HALFBITS> halfbits{};
 
     std::size_t h{0};
     // Alternating and ending in 0, so the lead flows into the frame's first
@@ -253,13 +253,13 @@ int run_selftest() {
     sleep_ms(2500); // let the debugprobe UART console attach
     printf("\nrx_pio_selftest: start\n");
 
-    const auto built = build_frame(HOST_FRAME);
+    static const auto built = build_frame(HOST_FRAME);
     bool ok{built.has_value()};
     if (!ok) {
         printf("FAIL: could not build the source wire frame\n");
     }
 
-    RxSelfTest test{};
+    static RxSelfTest test{};
     test.configure();
 
     if (ok) {
@@ -272,7 +272,7 @@ int run_selftest() {
         }
 
         // The recovered frame must pass the MAC parser (preamble lock, alignment, FCS).
-        std::array<std::uint8_t, WIRE_CAPACITY> recovered{};
+        static std::array<std::uint8_t, WIRE_CAPACITY> recovered{};
         for (std::size_t i{0}; i < wire.size(); ++i) {
             recovered[i] = recovered_octet(test.rx_words, i);
         }
@@ -306,7 +306,7 @@ int run_selftest() {
         // bit-offset from the frame; recover_frame must reassemble the exact
         // destination..FCS bytes at every offset. The 40 trailing bits guarantee the
         // word carrying the final FCS octet autopushes regardless of offset.
-        std::array<std::uint8_t, WIRE_CAPACITY> aligned{};
+        static std::array<std::uint8_t, WIRE_CAPACITY> aligned{};
         const std::span<const std::uint8_t> body{wire.subspan(PREAMBLE_SFD_LEN)};
         for (std::size_t offset{0}; offset < 8; ++offset) {
             const std::size_t nwords{pack_stimulus(wire, test.stim_words, false, offset, 40)};

@@ -28,6 +28,7 @@ build:rp2350 --output_groups=+pico_uf2_files
 build:rp2350 --@pico-sdk//bazel/config:PICO_CONFIG_EXTRA_HEADER=//src/config:pico_config_extra
 build:rp2350 --copt=-DPICO_USE_STACK_GUARDS=1
 build:rp2350 --linkopt=-Wl,--print-memory-usage
+build:rp2350 --per_file_copt=^src/.*\.cpp$@-Werror=stack-usage=2048
 
 build:asan --features=asan
 build:asan --copt=-fno-omit-frame-pointer

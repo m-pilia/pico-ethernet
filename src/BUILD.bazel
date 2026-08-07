@@ -1,10 +1,8 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
-load("//src/config:defs.bzl", "STACK_USAGE_COPTS")
 
 cc_binary(
     name = "pico_ethernet_firmware",
     srcs = ["main.cpp"],
-    copts = STACK_USAGE_COPTS,
     linkopts = ["-Wl,--gc-sections"],
     visibility = ["//tools/checks:__pkg__"],
     deps = [

@@ -179,7 +179,7 @@ const char* level_name(std::uint8_t level) {
 // Reconstruct the half-bit level+emphasis sequence from the captured samples and
 // compare against the reference encoder. Prints the first mismatch on failure.
 bool analyze(const SelfTest& t) {
-    std::array<Run, 128> runs_buf{};
+    static std::array<Run, 128> runs_buf{};
     const std::size_t nruns{polarity_runs(t.samples, runs_buf)};
     const std::span<const Run> runs{runs_buf.data(), nruns};
 
@@ -275,7 +275,7 @@ int run_selftest() {
     sleep_ms(2500); // let the debugprobe UART console attach
     printf("\ntx_pio_selftest: start\n");
 
-    SelfTest test{};
+    static SelfTest test{};
     test.configure();
 
     bool ok{true};

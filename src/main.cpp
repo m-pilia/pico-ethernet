@@ -7,7 +7,6 @@
 #include "src/mac/mac_address.h"
 #include "src/phy/phy.h"
 #include "src/usb/usb_net_device.h"
-#include "src/util/instrumentation.h" // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics
 #include "src/util/led_heartbeat.h"
 
 // Bounds the combined footprint of the two large .bss objects so buffer growth
@@ -27,10 +26,6 @@ int main() {
     static pico_ethernet::UsbNetDevice device{DEVICE_MAC, phy};
     device.initialize();
 
-    // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics. The DWT cycle counter must be
-    // armed after the final system clock is set (done in phy.initialize()).
-    pico_ethernet::instrument_init();
-
     pico_ethernet::LedHeartbeat led{LED_PIN};
     if (phy_ok) {
         led.good();
@@ -39,7 +34,6 @@ int main() {
     }
 
     while (true) {
-        ++pico_ethernet::g_instrument.main_loop_laps; // TEMPORARY: M1.5 Step 1
         device.task();
     }
 

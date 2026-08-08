@@ -44,7 +44,6 @@ genrule(
         "//src/phy:tx_emphasis",
         "//src/usb:usb_net_device",
         "//src/usb:usb_descriptors",
-        "//src/util:instrumentation",
     ],
     outs = ["no_alloc_gate.stamp"],
     cmd = "$(execpath :no_alloc_check)" +

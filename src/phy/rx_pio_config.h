@@ -26,6 +26,22 @@ inline void configure_rx_shift(pio_sm_config& cfg, std::uint32_t rxd_pin) {
     sm_config_set_clkdiv(&cfg, 1.0f);                            // 12 cycles/bit at 120 MHz
 }
 
+// Flush any sub-word residual left in the RX ISR into the FIFO. The SM shifts
+// right and autopushes a full word, so a frame that ends mid-word (the line goes
+// idle after the FCS with no further transitions) leaves its final octet(s) in the
+// ISR below the threshold, which a plain SM reset would discard. Clocking zero bits
+// in until the word autopushes shifts the residual down to the low bits, so it
+// lands byte-aligned and contiguous with the frame in the capture buffer; the added
+// high zero bits fall past the FCS and are ignored by the recovery. Exactly one
+// autopush occurs: the residual is fewer than RX_FIFO_WORD_BITS bits, so the clocks
+// after it cannot reach the threshold again (and an already word-aligned capture
+// autopushes one all-zero word, likewise ignored).
+inline void flush_rx_isr(PIO pio, std::uint32_t sm) {
+    for (std::uint32_t i{0}; i < RX_FIFO_WORD_BITS; ++i) {
+        pio_sm_exec_wait_blocking(pio, sm, pio_encode_in(pio_null, 1));
+    }
+}
+
 } // namespace pico_ethernet
 
 #endif // PHY_RX_PIO_CONFIG_H

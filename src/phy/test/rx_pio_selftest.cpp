@@ -162,7 +162,10 @@ struct RxSelfTest {
     }
 
     // Injects the packed stimulus, collects decoded octets, and returns the count.
-    std::size_t run(std::size_t nwords) {
+    // With `flush`, the RX ISR residual is pushed through before the DMA is stopped,
+    // exactly as Phy::on_rx_eof does at a carrier drop, so a stimulus that ends
+    // mid-word (no trailing transitions) still delivers its final octet(s).
+    std::size_t run(std::size_t nwords, bool flush = false) {
         pio_sm_set_enabled(pio, sm_stim, false);
         pio_sm_set_enabled(pio, sm_rx, false);
         pio_sm_clear_fifos(pio, sm_stim);
@@ -198,6 +201,13 @@ struct RxSelfTest {
 
         dma_channel_wait_for_finish_blocking(dma_stim);
         busy_wait_us(50); // let the last FIFO-buffered half-bits clock through
+
+        if (flush) {
+            flush_rx_isr(pio, sm_rx);
+            while (!pio_sm_is_rx_fifo_empty(pio, sm_rx) && dma_channel_hw_addr(dma_rx)->transfer_count != 0) {
+                tight_loop_contents();
+            }
+        }
 
         dma_channel_abort(dma_rx);
         const std::uint32_t remaining{dma_channel_hw_addr(dma_rx)->transfer_count};
@@ -328,6 +338,37 @@ int run_selftest() {
             }
             if (!match) {
                 printf("FAIL: offset %u: recovered frame bytes mismatch\n", static_cast<unsigned>(offset));
+                ok = false;
+            }
+        }
+
+        // End-of-frame residual flush: with no trailing bits the stimulus ends
+        // mid-word, so the frame's final FCS octet(s) sit in the RX ISR below the
+        // autopush threshold -- exactly the on-wire case where the line goes idle
+        // after the FCS. flush_rx_isr must push them through so recover_frame still
+        // recovers the whole destination..FCS frame at every carrier-gate offset.
+        for (std::size_t offset{0}; offset < 8; ++offset) {
+            const std::size_t nwords{pack_stimulus(wire, test.stim_words, false, offset, 0)};
+            const std::size_t gotwords{test.run(nwords, true)};
+            const std::span<const std::uint8_t> raw{
+                reinterpret_cast<const std::uint8_t*>(test.rx_words.data()), gotwords * RX_OCTETS_PER_WORD};
+            const std::expected<std::size_t, FrameError> len{recover_frame(raw, aligned)};
+            if (!len || *len != body.size()) {
+                printf(
+                    "FAIL: offset %u: flushed recover_frame did not recover the frame\n",
+                    static_cast<unsigned>(offset));
+                ok = false;
+                continue;
+            }
+            bool match{true};
+            for (std::size_t i{0}; i < body.size(); ++i) {
+                if (aligned[i] != body[i]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match) {
+                printf("FAIL: offset %u: flushed recovered frame bytes mismatch\n", static_cast<unsigned>(offset));
                 ok = false;
             }
         }

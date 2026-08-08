@@ -38,7 +38,6 @@ cc_library(
         "//src/mac:mac_address",
         "//src/phy:phy",
         "//src/phy:phy_stats",
-        "//src/util:instrumentation",  # TEMPORARY: M1.5 Step 1 diagnostics
         "@pico-sdk//src/rp2_common/hardware_irq",
         "@pico-sdk//bazel/config:PICO_TINYUSB_LIB",
         "@pico-sdk//src/rp2_common/tinyusb:tinyusb_port",

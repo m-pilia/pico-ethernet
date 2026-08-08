@@ -13,7 +13,6 @@
 
 #include "src/mac/ethernet_frame.h"
 #include "src/mac/frame_builder.h"
-#include "src/util/instrumentation.h" // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics
 
 #include "tusb.h"
 
@@ -99,18 +98,22 @@ void UsbNetDevice::task() {
     // to USB right now; stop as soon as the NTB path is full or the pool is empty.
     // Frames left in the pool are dropped cheaply in the capture interrupt
     // (pool_overflow).
+    //
+    // Test the pool before touching USB: most laps have nothing waiting, and taking
+    // the USB interrupt lock to probe tud_network_can_xmit on every empty lap masked
+    // USBCTRL_IRQ for a large fraction of runtime, delaying the ISR that completes IN
+    // transfers and thereby starving egress. rx_pending() is a lock-free peek.
     for (;;) {
+        if (!phy_.rx_pending()) {
+            break;
+        }
         {
             UsbInterruptLock lock;
             if (!tud_network_can_xmit(MAX_FRAME_NO_FCS)) {
                 break;
             }
         }
-        ++g_instrument.can_xmit_true; // TEMPORARY: M1.5 Step 1
         const Phy::RxFrame received{phy_.poll_rx()};
-        if (received.kind == Phy::RxFrame::Kind::None) {
-            break;
-        }
         switch (received.kind) {
             case Phy::RxFrame::Kind::Frame:
                 deliver_to_host(received.frame);
@@ -122,7 +125,7 @@ void UsbNetDevice::task() {
                 rx_stats_.record_error(received.error);
                 break;
             case Phy::RxFrame::Kind::None:
-                break; // handled above
+                break; // rx_pending() was true and we are the sole consumer, so unreachable
         }
     }
 }
@@ -259,13 +262,6 @@ void UsbNetDevice::on_network_init() {
 bool UsbNetDevice::on_get_statistic(std::uint16_t selector, std::uint32_t& value) const {
     // Runs in the USB ISR. It reads stats_/rx_stats_ without a lock: every counter
     // has a single writer (see TxStats), so each aligned 32-bit read is coherent.
-    //
-    // TEMPORARY: M1.5 Step 1 diagnostics live in a private selector range that does
-    // not overlap the standard/diagnostic selectors resolved below.
-    if (const auto instrumented = instrument_statistic(selector)) {
-        value = *instrumented;
-        return true;
-    }
     const auto result = ethernet_statistic(selector, stats_, rx_stats_);
     if (!result) {
         return false;
@@ -283,10 +279,7 @@ extern "C" {
 // (highest order priority) has enqueued device events, and drains them through
 // tud_task_ext() so the device stack is serviced from the interrupt rather than the
 // main loop. Registered in UsbNetDevice::initialize().
-void pico_ethernet_usb_irq_handler(void) {
-    const pico_ethernet::InstrumentScope timer{pico_ethernet::g_instrument.tud_task}; // TEMPORARY: M1.5 Step 1
-    tud_task_ext(0, true);
-}
+void pico_ethernet_usb_irq_handler(void) { tud_task_ext(0, true); }
 
 // Defined by the application; TinyUSB reads it for the iMACAddress descriptor.
 std::uint8_t tud_network_mac_address[6] = {0};

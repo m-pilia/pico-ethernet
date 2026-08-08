@@ -18,7 +18,6 @@
 #include "src/phy/rx_frame_recover.h"
 #include "src/phy/rx_pio_config.h"
 #include "src/phy/tx_emphasis.h"
-#include "src/util/instrumentation.h" // TEMPORARY: MILESTONE 1.5 Step 1 diagnostics
 
 #include "rx.pio.h"
 #include "tx_emphasis.pio.h"
@@ -30,11 +29,6 @@ namespace {
 // The GPIO IRQ callback carries no user data, so the active PHY is published here
 // for the RXC end-of-frame trampoline to forward to.
 Phy* s_rx_irq_phy{nullptr};
-
-// TEMPORARY: M1.5 Step 1. Driven high for the duration of the EOF (falling-edge)
-// handler so a scope can compare when we actually service end-of-frame against the
-// RXC line. A free GPIO on the Pico 2 header.
-constexpr std::uint32_t DEBUG_RX_EOF_PIN{10};
 } // namespace
 
 Phy::Phy(const Pins& pins)
@@ -81,13 +75,7 @@ bool Phy::initialize() {
     // End of frame is the carrier (RXC) falling edge; finalize each frame there
     // instead of waiting for the main loop to come back around.
     s_rx_irq_phy = this;
-    // TEMPORARY: M1.5 Step 1. Also take the rising edge (never disabled) purely to
-    // count the true per-frame edge rate at the pin, independent of the EOF
-    // (falling-edge) servicing that the TX guard disables; and a scope marker pin.
-    gpio_init(DEBUG_RX_EOF_PIN);
-    gpio_set_dir(DEBUG_RX_EOF_PIN, GPIO_OUT);
-    gpio_put(DEBUG_RX_EOF_PIN, false);
-    gpio_set_irq_enabled_with_callback(pins_.rxc, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &Phy::rx_irq_handler);
+    gpio_set_irq_enabled_with_callback(pins_.rxc, GPIO_IRQ_EDGE_FALL, true, &Phy::rx_irq_handler);
 
     // Finalize each transmit (idle drive + receiver re-arm) in the TX-DMA completion
     // interrupt so the receiver comes back the instant our frame drains, rather than
@@ -166,45 +154,52 @@ void Phy::rearm_capture(std::size_t slot) {
 
 void Phy::rx_irq_handler(uint gpio, std::uint32_t events) {
     (void)gpio;
-    // TEMPORARY: M1.5 Step 1. Count every rising edge (the true per-frame rate);
-    // this event is never disabled, unlike the falling-edge EOF servicing below.
-    if ((events & GPIO_IRQ_EDGE_RISE) != 0u) {
-        instrument_rxc_rise();
-    }
     if ((events & GPIO_IRQ_EDGE_FALL) != 0u && s_rx_irq_phy != nullptr) {
-        gpio_put(DEBUG_RX_EOF_PIN, true); // TEMPORARY: M1.5 Step 1 scope marker
         s_rx_irq_phy->on_rx_eof();
-        gpio_put(DEBUG_RX_EOF_PIN, false);
     }
 }
 
 void Phy::on_rx_eof() {
-    // TEMPORARY: M1.5 Step 1. Times every IRQ fire, including the spurious-edge and
-    // self-transmit early returns, so the count reflects the true IRQ load.
-    const InstrumentScope timer{g_instrument.rx_irq};
     if (gpio_get(pins_.rxc)) {
         return; // spurious edge (carrier envelope ripple); the frame is still live
     }
 
     // The RX SM has stalled on the missing edges and DMA has drained every complete
-    // word, so the remaining count is stable.
-    dma_channel_abort(dma_rx_);
-    const std::uint32_t remaining{dma_channel_hw_addr(dma_rx_)->transfer_count};
-    const std::size_t words{RX_WORD_CAPACITY - remaining};
+    // word, so the remaining count is stable and readable without stopping the DMA.
+    const std::uint32_t remaining_before{dma_channel_hw_addr(dma_rx_)->transfer_count};
+    const std::size_t words_before{RX_WORD_CAPACITY - remaining_before};
 
     // Half-duplex self-reception: while we transmit, our own signal is at our own
     // receiver. Don't enqueue it -- discard and keep capturing into the same slot.
-    if (active_ || words == 0) {
-        if (active_) { // TEMPORARY: M1.5 Step 1 giant diagnosis
-            instrument_eof_active_discard();
-        } else {
-            instrument_eof_empty_discard();
-        }
+    // A carrier blip that decoded nothing is likewise discarded.
+    if (active_ || words_before == 0) {
+        dma_channel_abort(dma_rx_);
         rearm_capture(rx_ring_.capture_slot());
         return;
     }
 
-    instrument_capture(words * RX_OCTETS_PER_WORD); // TEMPORARY: M1.5 Step 1
+    // The frame's final FCS octet(s) may sit in the RX ISR below the 32-bit autopush
+    // threshold (the line goes idle after the FCS, so no trailing edges flush the
+    // word). Push the residual through to the DMA before stopping it, otherwise every
+    // frame loses its FCS tail and fails validation.
+    //
+    // Only when the DMA still has a landing slot. If the capture ran the buffer full
+    // (remaining_before == 0, i.e. words_before == capacity), the DMA is finished, the
+    // SM has filled the RX FIFO with no drain, and forcing another autopush would stall
+    // the SM on a full FIFO forever -- flush_rx_isr blocks on that exec, hanging the
+    // end-of-frame interrupt. An over-length capture is a discarded giant anyway, so
+    // skip the flush and let it be rejected.
+    if (words_before < RX_WORD_CAPACITY) {
+        flush_rx_isr(pio_, sm_rx_);
+        while (!pio_sm_is_rx_fifo_empty(pio_, sm_rx_) && dma_channel_hw_addr(dma_rx_)->transfer_count != 0) {
+            tight_loop_contents(); // let the DMA carry the flushed word into the buffer
+        }
+    }
+
+    dma_channel_abort(dma_rx_);
+    const std::uint32_t remaining{dma_channel_hw_addr(dma_rx_)->transfer_count};
+    const std::size_t words{RX_WORD_CAPACITY - remaining};
+
     // Hand the DMA a free buffer for the next frame and queue this one for the
     // main-loop drain. No parsing or copying here -- that is the drain's job.
     rearm_capture(rx_ring_.publish(words));
@@ -223,15 +218,7 @@ Phy::RxFrame Phy::poll_rx() {
     // bit-offset from the frame's.
     const std::span<const std::uint8_t> raw{
         reinterpret_cast<const std::uint8_t*>(rx_pool_[done->slot].data()), done->word_count * RX_OCTETS_PER_WORD};
-    const std::expected<std::size_t, FrameError> recovered{[&] {
-        const InstrumentScope timer{g_instrument.recover_frame}; // TEMPORARY: M1.5 Step 1
-        return recover_frame(raw, rx_frame_);
-    }()};
-    // TEMPORARY: M1.5 Step 1. Classify giants before release(), while raw still
-    // owns the slot (release lets an IRQ re-arm the DMA into it).
-    if (!recovered && recovered.error() == FrameError::Giant) {
-        instrument_giant(raw);
-    }
+    const std::expected<std::size_t, FrameError> recovered{recover_frame(raw, rx_frame_)};
     rx_ring_.release();
 
     if (!recovered) {

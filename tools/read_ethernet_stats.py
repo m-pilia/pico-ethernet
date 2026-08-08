@@ -53,34 +53,6 @@ SELECTORS = {
     0xF5: "  decode_error",
     0xF6: "  pool_overflow",
     0xF7: "  host_backpressure",
-    # TEMPORARY: MILESTONE 1.5 Step 1 instrumentation (see src/util/instrumentation.h).
-    # Removed together with the on-device module at the end of the milestone.
-    0xE0: "uptime_ms",
-    0xE1: "main_loop_laps",
-    0xE2: "can_xmit_true",
-    0xE3: "tud_task_count",
-    0xE4: "tud_task_avg_ns",
-    0xE5: "tud_task_worst_ns",
-    0xE6: "recover_frame_count",
-    0xE7: "recover_frame_avg_ns",
-    0xE8: "recover_frame_worst_ns",
-    0xE9: "rx_irq_count",
-    0xEA: "rx_irq_avg_ns",
-    0xEB: "rx_irq_worst_ns",
-    # TEMPORARY: MILESTONE 1.5 Step 1 giant diagnosis.
-    0xC0: "capture_len_<64",
-    0xC1: "capture_len_64_255",
-    0xC2: "capture_len_256_1023",
-    0xC3: "capture_len_1024_1499",
-    0xC4: "capture_len_>=1500",
-    0xC5: "giant_one_sfd",
-    0xC6: "giant_multi_sfd",
-    0xC7: "eof_active_discard",
-    0xC8: "eof_empty_discard",
-    0xD0: "rxc_rise_count",
-    0xD1: "rxc_disabled_total_ms",
-    0xD2: "rxc_disable_windows",
-    0xD3: "rxc_disabled_worst_ns",
 }
 
 CDC_COMMUNICATIONS_CLASS = 0x02
@@ -105,7 +77,6 @@ def main():
     if reattach:
         dev.detach_kernel_driver(itf)
     usb.util.claim_interface(dev, itf)
-    values = {}
     try:
         for selector, label in SELECTORS.items():
             try:
@@ -116,7 +87,6 @@ def main():
                 print(f"{label:<22} <unavailable> ({exc.strerror})", file=sys.stderr)
                 continue
             (value,) = struct.unpack("<I", bytes(data))
-            values[selector] = value
             print(f"{label:<22} {value}")
     finally:
         usb.util.release_interface(dev, itf)
@@ -125,48 +95,6 @@ def main():
                 dev.attach_kernel_driver(itf)
             except usb.core.USBError:
                 pass
-
-    # TEMPORARY (MILESTONE 1.5 Step 1): derived per-second rates from the snapshot.
-    uptime_ms = values.get(0xE0, 0)
-    if uptime_ms:
-        secs = uptime_ms / 1000.0
-        print("\nderived (per second, cumulative since boot):")
-        for selector, label in (
-            (0xE1, "main_loop_laps/s"),
-            (0xE2, "can_xmit_true/s"),
-            (0x02, "rcv_ok/s"),
-            (0xE9, "rx_irq/s"),
-            (0xE6, "recover_frame/s"),
-            (0xD0, "rxc_rise/s"),
-        ):
-            if selector in values:
-                print(f"  {label:<20} {values[selector] / secs:,.0f}")
-
-    # TEMPORARY (MILESTONE 1.5 Step 1): giant merge indicator.
-    one_sfd = values.get(0xC5, 0)
-    multi_sfd = values.get(0xC6, 0)
-    total_giants = one_sfd + multi_sfd
-    if total_giants:
-        print(
-            f"\ngiants: {multi_sfd} multi-SFD (likely merge) / {total_giants}"
-            f" = {100 * multi_sfd / total_giants:.0f}%"
-        )
-
-    # TEMPORARY (Step 1): RXC edge-servicing. Rises = true per-frame edges at the
-    # pin; EOF-handler entries (rx_irq_count) = falling edges we actually serviced.
-    rise = values.get(0xD0, 0)
-    eof = values.get(0xE9, 0)
-    disabled_ms = values.get(0xD1, 0)
-    if rise:
-        print(
-            f"\nRXC edges: {rise} rises (pin) vs {eof} EOF-handler entries"
-            f" = {100 * eof / rise:.0f}% serviced"
-        )
-    if uptime_ms and disabled_ms:
-        print(
-            f"RXC EOF-IRQ disabled: {disabled_ms} / {uptime_ms} ms"
-            f" = {100 * disabled_ms / uptime_ms:.0f}% of uptime"
-        )
 
 
 if __name__ == "__main__":

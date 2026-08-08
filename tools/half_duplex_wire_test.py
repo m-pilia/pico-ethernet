@@ -58,9 +58,8 @@ RCVBUF_BYTES = 16 * 1024 * 1024
 IMIX_PAYLOADS = [MIN_PAYLOAD] * 7 + [576] * 4 + [MAX_PAYLOAD]
 
 # Labels as emitted by read_ethernet_stats.py (leading whitespace stripped by the
-# parser). Covers the full TX/RX outcome set plus the temporary giant-diagnosis
-# instrumentation, so a failing run localizes both the TX drops (xmit_error) and the
-# giant sub-classification (capture-length histogram, one- vs multi-SFD).
+# parser). Covers the full TX/RX outcome set, so a failing run localizes the TX drops
+# (xmit_error) and the RX per-error sub-counters.
 DEVICE_COUNTERS = (
     # TX
     "xmit_ok",
@@ -76,16 +75,6 @@ DEVICE_COUNTERS = (
     "decode_error",
     "pool_overflow",
     "host_backpressure",
-    # RX giant diagnosis (TEMPORARY M1.5 Step 1 instrumentation)
-    "capture_len_<64",
-    "capture_len_64_255",
-    "capture_len_256_1023",
-    "capture_len_1024_1499",
-    "capture_len_>=1500",
-    "giant_one_sfd",
-    "giant_multi_sfd",
-    "eof_active_discard",
-    "eof_empty_discard",
 )
 
 

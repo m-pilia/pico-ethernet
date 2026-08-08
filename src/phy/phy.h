@@ -87,6 +87,10 @@ class Phy {
     // Call from the main loop.
     [[nodiscard]] RxFrame poll_rx();
 
+    // True when a completed frame is waiting in the pool, without the cost of
+    // recovering it. Lets the drain test for work before touching the USB path.
+    [[nodiscard]] bool rx_pending() const { return rx_ring_.peek().has_value(); }
+
     // Running count of frames dropped because the receive buffer pool was exhausted
     // (the drain fell behind line rate). A visible, counted drop, not a silent loss.
     [[nodiscard]] std::uint32_t rx_pool_overflow() const { return rx_ring_.overflow(); }

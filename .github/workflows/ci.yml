@@ -29,16 +29,6 @@ jobs:
           common --repository_cache=/mnt/bazel-repo-cache
           EOF
 
-      - name: Cache Bazel
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: |
-            /mnt/bazel
-            /mnt/bazel-repo-cache
-            ~/.cache/bazelisk
-          key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel.lock', '.bazelversion') }}
-          restore-keys: bazel-${{ runner.os }}-
-
       - name: Host tests
         run: bazelisk test //...
 

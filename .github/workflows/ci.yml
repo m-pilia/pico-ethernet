@@ -9,6 +9,15 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
+      - name: Free up storage space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
       - uses: actions/checkout@v4
 
       - name: Install bazelisk
@@ -18,15 +27,6 @@ jobs:
             https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64
           chmod +x "$HOME/.local/bin/bazelisk"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      # /mnt has more available space
-      - name: Redirect Bazel to /mnt
-        run: |
-          sudo mkdir -p /mnt/bazel /mnt/bazel-repo-cache
-          sudo chown -R "$(id -un):$(id -gn)" /mnt/bazel /mnt/bazel-repo-cache
-          cat > "$HOME/.bazelrc" <<'EOF'
-          startup --output_user_root=/mnt/bazel
-          EOF
 
       - name: Host tests
         run: bazelisk test //...

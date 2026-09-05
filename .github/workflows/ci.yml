@@ -26,7 +26,6 @@ jobs:
           sudo chown -R "$(id -un):$(id -gn)" /mnt/bazel /mnt/bazel-repo-cache
           cat > "$HOME/.bazelrc" <<'EOF'
           startup --output_user_root=/mnt/bazel
-          common --repository_cache=/mnt/bazel-repo-cache
           EOF
 
       - name: Host tests

@@ -1,0 +1,135 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{circuitikz}
+\usetikzlibrary{calc}
+\begin{document}
+\begin{circuitikz}[
+  american, font=\footnotesize,
+  every node/.style={inner sep=3pt},
+  crossing wire/.style={preaction={draw=white, line width=3pt}},
+]
+  \node[op amp, noinv input up] (U1) at (10,5) {U1};
+  \node[op amp, noinv input up] (U2) at (10,-1.4) {U2};
+  \coordinate (P7) at (U1.+ -| 0,0);
+  \coordinate (P8) at (0,2.4);
+  \coordinate (P6) at ($(P7)!0.5!(P8)$);
+  \coordinate (VCM) at (2,-4.2);
+  \coordinate (VTH) at (7,-4.2);
+  \coordinate (u1p) at (U1.+ -| 8,0);
+  \coordinate (u2p) at (U2.+ -| 8,0);
+  \coordinate (u1o) at (13.8,5);
+  \coordinate (u2o) at (13.8,-1.4);
+
+  \draw (P7 -| -1.6,0) node[left]{RJ45 3}
+    to[L, l=$L_p$] (P8 -| -1.6,0) node[left]{RJ45 6};
+  \draw[<->] (-1.2,4.8) -- (-0.5,4.8);
+  \draw (P7) node[circ]{} to[L] (P6) node[circ]{}
+    to[L] (P8) node[circ]{};
+  \node[above right] at (P7) {P7};
+  \node[above] at (P6 -| 0.8,0) {P6};
+  \node[below right] at (P8) {P8};
+
+  \draw (P6) -- (P6 -| 0.8,0) |- (VCM);
+  \draw (P7) -- (U1.+ -| 5.8,0);
+  % A white clearance at wire crossings distinguishes them from junctions.
+  \draw[crossing wire] (P8) -- (4.4,2.4) -- (U1.- -| 4.4,0);
+  \node[circ] at (P8) {};
+  \node[above] at (P7 -| 2,0) {N\_P7};
+  \node[below] at (P8 -| 2,0) {N\_P8};
+  \draw (P7 -| 2.8,0) node[circ]{}
+    to[R, l={\shortstack{$R_t$\\$100\,\Omega$}}]
+    (P8 -| 2.8,0) node[circ]{};
+
+  % Rs2p is small so that the received signal is not low-passed by the
+  % comparator input capacitance before it can cross Vth.
+  \draw (U1.+ -| 5.2,0) node[circ]{} -- (U2.+ -| 5.2,0)
+    -- (U2.+ -| 5.8,0)
+    to[R, l={\shortstack{$R_{s2p}$\\$100\,\Omega$}}] (u2p)
+    node[circ]{} -- (U2.+);
+  \draw (U1.+ -| 5.8,0)
+    to[R, l={\shortstack{$R_{s1p}$\\$100\,\Omega$}}] (u1p)
+    node[circ]{} -- (U1.+);
+  \draw[crossing wire] (U1.- -| 4.4,0) -- (U1.- -| 5.8,0);
+  \draw (U1.- -| 5.8,0)
+    to[R, l_={\shortstack{$R_{s1n}$\\$100\,\Omega$}}]
+    (U1.- -| 8,0) -- (U1.-);
+
+  \draw (2,-2.4) node[vcc]{3.3\,V}
+    to[R, l_={\shortstack{$R_{v1}$\\$1.2\,\mathrm{k}\Omega$}}]
+    (VCM) node[circ]{};
+  \draw (VCM)
+    to[R, l_={\shortstack{$R_{v2}$\\$1.0\,\mathrm{k}\Omega$}}]
+    (2,-6) node[ground]{};
+  \draw (VCM) -- (3.6,-4.2)
+    to[C, l={\shortstack{$C_\mathrm{vcm}$\\$100\,\mathrm{nF}$}}]
+    (3.6,-6) node[ground]{};
+  \node[above right] at (VCM) {VCM $\approx 1.5\,\mathrm{V}$};
+
+  \draw (7,-2.4) node[vcc]{3.3\,V}
+    to[R, l_={\shortstack{$R_{vth1}$\\$\approx 1.5\,\mathrm{k}\Omega$}}]
+    (VTH) node[circ]{};
+  \draw (VTH)
+    to[R, l_={\shortstack{$R_{vth2}$\\$\approx 1.6\,\mathrm{k}\Omega$}}]
+    (7,-6) node[ground]{};
+  \draw (VTH) -- (9,-4.2)
+    to[C, l={\shortstack{$C_\mathrm{vth}$\\$100\,\mathrm{nF}$}}]
+    (9,-6) node[ground]{};
+  \draw (8,-4.2) node[circ]{} |- (U2.-);
+  \node[below right] at (VTH) {VTH $\approx 1.7\,\mathrm{V}$};
+
+  % Series Rs1o damps the fast rail-to-rail output edge into GP8's capacitance,
+  % cutting the supply/ground di/dt that otherwise self-oscillates U1 on the idle
+  % line (paired with tight decoupling and a short star ground to the Pico GND).
+  \draw (U1.out) -- (u1o) node[circ]{}
+    to[R, l={\shortstack{$R_{s1o}$\\$220\,\Omega$}}] (16.5,5)
+    -- (20,5) node[right]{GP8 (RXD)};
+  % Hysteresis Rf1: output back to +in, dV = Vswing*Rs1p/(Rs1p+Rf1) ~ 33 mV, to
+  % quiet residual chatter around the zero-differential idle.
+  \draw (u1p) -- (8,8.6)
+    to[R, l={\shortstack{$R_{f1}$\\$10\,\mathrm{k}\Omega$}}]
+    (13.8,8.6) -- (u1o);
+  \draw (U1.up) -- (U1.up |- 0,7.2) coordinate(u1vp)
+    node[circ]{} -- (U1.up |- 0,7.6) node[vcc]{3.3\,V};
+  \draw (u1vp) -- (11.7,7.2)
+    to[C, l={\shortstack{$C_{d1}$\\$100\,\mathrm{nF}$}}]
+    (11.7,6) node[ground]{};
+  \draw (U1.down) -- (U1.down |- 0,3.8) node[ground]{};
+
+  % hysteresis Rh: output back to +in for ~33 mV of hysteresis
+  % (dV = Vswing * Rs2p/(Rs2p+Rh)). With Rs2p=100 ohm the feedback couples onto
+  % the pair through Rs2p, so keep Rh >= 10k: a too-small Rh injects enough
+  % current to bootstrap the Vcm common-mode bias up and latch RXC.
+  \draw (u2p) -- (8,2.2)
+    to[R, l={\shortstack{$R_h$\\$10\,\mathrm{k}\Omega$}}]
+    (13.8,2.2) -- (u2o);
+  % persistence via diode envelope detector -> GP9. U2 fires only on positive
+  % excursions, so its raw output is a low-duty pulse train; Dp charges Cp to the
+  % peak on each pulse (fast attack) and blocks between pulses, so Cp holds a
+  % steady carrier level (slow decay through Rbleed, tau ~ 2 us) instead of a
+  % symmetric RC averaging the train down below the logic threshold.
+  \draw (U2.out) -- (u2o) node[circ]{}
+    to[D, l=$D_p$] (16.5,-1.4) coordinate(gp9) node[circ]{}
+    -- (18.5,-1.4) coordinate(rb) node[circ]{}
+    -- (20,-1.4) node[right]{GP9 (RXC)};
+  \draw (gp9) -- (16.5,-4.2)
+    to[C, l_={\shortstack{$C_p$\\$470\,\mathrm{pF}$}}]
+    (16.5,-6) node[ground]{};
+  \draw (rb) -- (18.5,-4.2)
+    to[R, l={\shortstack{$R_\mathrm{bleed}$\\$4.7\,\mathrm{k}\Omega$}}]
+    (18.5,-6) node[ground]{};
+  \draw (U2.up) -- (U2.up |- 0,0.8) coordinate(u2vp)
+    node[circ]{} -- (U2.up |- 0,1.2) node[vcc]{3.3\,V};
+  \draw (u2vp) -- (11.7,0.8)
+    to[C, l={\shortstack{$C_{d2}$\\$100\,\mathrm{nF}$}}]
+    (11.7,-0.4) node[ground]{};
+  \draw (U2.down) -- (U2.down |- 0,-2.6) node[ground]{};
+
+  \draw (-1.6,8.6) node[vcc]{3.3\,V}
+    to[C, l={\shortstack{$C_\mathrm{bulk}$\\$10\,\mu\mathrm{F}$}}]
+    (-1.6,6.8) node[ground]{};
+  \node[anchor=west, align=left] at (0.5,7.7)
+    {Shared bulk bypass\\on the 3.3\,V rail};
+  \node[anchor=west] at (-1.6,-7)
+    {U1, U2: TLV3501. Both SHDN pins tied to GND (comparators enabled).};
+
+\end{circuitikz}
+\end{document}

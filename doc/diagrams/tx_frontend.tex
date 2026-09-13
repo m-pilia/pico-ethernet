@@ -1,0 +1,46 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{circuitikz}
+\usetikzlibrary{positioning}
+\begin{document}
+\begin{circuitikz}[american, font=\footnotesize]
+
+  %===================== Pico GPIO drive (resistor DAC) =====================
+  \node[left] at (-3.4, 1.6) {GP2 \textbf{TXP}};
+  \node[left] at (-3.4, 0.0) {GP4 \textbf{TXE}};
+  \node[left] at (-3.4,-1.6) {GP3 \textbf{TXN}};
+
+  % TXP -> Rs -> P1 (upper leg of the differential pair)
+  \draw (-3.4,1.6) to[R, l=$R_{s}{=}33\,\Omega$] (0,1.6) coordinate(P1);
+  % TXN -> Rs -> P3 (lower leg)
+  \draw (-3.4,-1.6) to[R, l_=$R_{s}{=}33\,\Omega$] (0,-1.6) coordinate(P3);
+  % TXE -> Re -> P1 side (emphasis tap; injects on the P1 leg only at this tier)
+  \draw (-3.4,0.0) to[R, l=$R_{e}{=}82\,\Omega$] (-1.1,0.0) -- (-1.1,1.6) -- (P1);
+
+  \node[circ] at (P1) {};
+  \node[circ] at (P3) {};
+  \node[above right=0pt and 2pt] at (P1) {P1};
+  \node[below right=0pt and 2pt] at (P3) {P3};
+
+  %===================== TX transformer (1:1, CT primary) =====================
+  % primary: two half-windings, junction = center tap P2 (left open)
+  \draw (P1) -- (1.6,1.6) coordinate(pt);
+  \draw (P3) -- (1.6,-1.6) coordinate(pb);
+  \draw (pt) to[L] (1.6,0) coordinate(P2) node[circ]{} to[L] (pb);
+  \draw (P2) -- (2.6,0);
+  \node[anchor=west] at (2.65,0.28) {P2 (CT), open};
+  \draw[<->] (3.3,0.9) -- (3.9,0.9);   % magnetic coupling
+
+  % secondary -> RJ45 TD pair (pins 1/2)
+  \draw (4.6,1.6) coordinate(st) to[L] (4.6,-1.6) coordinate(sb);
+  \draw (st) -- (6.4,1.6) node[right]{RJ45 1};
+  \draw (sb) -- (6.4,-1.6) node[right]{RJ45 2};
+
+  % cable far-end load (the peer PHY / cable reflects ~100 ohm)
+  \draw[dashed] (8.0,1.6) to[R, l=$\approx\!100\,\Omega$] (8.0,-1.6);
+  \node[align=center, right] at (8.6,0) {to cable\\(far end)};
+
+  %===================== Shield =====================
+  \draw (4.0,-2.7) node[left]{BOB SH} -- (4.0,-3.1) node[ground]{};
+
+\end{circuitikz}
+\end{document}

@@ -1,0 +1,8 @@
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.pdf
+*.png
+*.svg

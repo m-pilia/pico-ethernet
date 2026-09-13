@@ -76,6 +76,11 @@ need for root):
 uv run tools/read_ethernet_stats.py
 ```
 
+## Credits
+
+Most of the source code is LLM generated with a mix of models (GLM 5.3 and 5.2,
+GPT-5.6-Sol and GPT-6-astra, Claude Opus 4.8).
+
 ## License
 
 This project is made available under a [MIT LICENSE](LICENSE).

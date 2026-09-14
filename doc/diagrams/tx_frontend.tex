@@ -1,46 +1,66 @@
 \documentclass[border=10pt]{standalone}
 \usepackage{circuitikz}
-\usetikzlibrary{positioning}
 \begin{document}
 \begin{circuitikz}[american, font=\footnotesize]
 
-  %===================== Pico GPIO drive (resistor DAC) =====================
-  \node[left] at (-3.4, 1.6) {GP2 \textbf{TXP}};
-  \node[left] at (-3.4, 0.0) {GP4 \textbf{TXE}};
-  \node[left] at (-3.4,-1.6) {GP3 \textbf{TXN}};
+  \node[npn] (Q2) at (0,3) {};
+  \node[right=5pt] at (Q2) {Q2: 2N2222A};
+  \node[npn] (Q1) at (0,-3) {};
+  \node[right=5pt] at (Q1) {Q1: 2N2222A};
 
-  % TXP -> Rs -> P1 (upper leg of the differential pair)
-  \draw (-3.4,1.6) to[R, l=$R_{s}{=}33\,\Omega$] (0,1.6) coordinate(P1);
-  % TXN -> Rs -> P3 (lower leg)
-  \draw (-3.4,-1.6) to[R, l_=$R_{s}{=}33\,\Omega$] (0,-1.6) coordinate(P3);
-  % TXE -> Re -> P1 side (emphasis tap; injects on the P1 leg only at this tier)
-  \draw (-3.4,0.0) to[R, l=$R_{e}{=}82\,\Omega$] (-1.1,0.0) -- (-1.1,1.6) -- (P1);
+  \draw (-5,3) node[ocirc]{} node[left]{GP3 \textbf{TXN}}
+    to[R, l={$R_{B2}=220\,\Omega$}] (-2,3) node[circ]{} -- (Q2.B);
+  \draw (-2,3) to[R, l_={$R_{PD2}=10\,\mathrm{k}\Omega$}]
+    (-2,0.5) node[ground]{};
+  \draw (Q2.E) to[R, l={$R_{E2}=22\,\Omega\; (\frac12\,\mathrm{W})$}]
+    (0,0.5) node[ground]{};
 
-  \node[circ] at (P1) {};
-  \node[circ] at (P3) {};
-  \node[above right=0pt and 2pt] at (P1) {P1};
-  \node[below right=0pt and 2pt] at (P3) {P3};
+  \draw (-5,-3) node[ocirc]{} node[left]{GP2 \textbf{TXP}}
+    to[R, l={$R_{B1}=220\,\Omega$}] (-2,-3) node[circ]{} -- (Q1.B);
+  \draw (-2,-3) to[R, l_={$R_{PD1}=10\,\mathrm{k}\Omega$}]
+    (-2,-5.5) node[ground]{};
+  \draw (Q1.E) to[R, l={$R_{E1}=22\,\Omega\; (\frac12\,\mathrm{W})$}]
+    (0,-5.5) node[ground]{};
 
-  %===================== TX transformer (1:1, CT primary) =====================
-  % primary: two half-windings, junction = center tap P2 (left open)
-  \draw (P1) -- (1.6,1.6) coordinate(pt);
-  \draw (P3) -- (1.6,-1.6) coordinate(pb);
-  \draw (pt) to[L] (1.6,0) coordinate(P2) node[circ]{} to[L] (pb);
-  \draw (P2) -- (2.6,0);
-  \node[anchor=west] at (2.65,0.28) {P2 (CT), open};
-  \draw[<->] (3.3,0.9) -- (3.9,0.9);   % magnetic coupling
+  \node[above left, font=\scriptsize] at (Q2.C) {C};
+  \node[above left, font=\scriptsize] at (Q2.B) {B};
+  \node[below left, font=\scriptsize] at (Q2.E) {E};
+  \node[above left, font=\scriptsize] at (Q1.C) {C};
+  \node[above left, font=\scriptsize] at (Q1.B) {B};
+  \node[below left, font=\scriptsize] at (Q1.E) {E};
 
-  % secondary -> RJ45 TD pair (pins 1/2)
-  \draw (4.6,1.6) coordinate(st) to[L] (4.6,-1.6) coordinate(sb);
-  \draw (st) -- (6.4,1.6) node[right]{RJ45 1};
-  \draw (sb) -- (6.4,-1.6) node[right]{RJ45 2};
+  \draw (Q2.C) -- (0,5) -- (7,5) coordinate(P1) node[circ]{};
+  \draw (Q1.C) -- (0,-1) -- (7,-1) coordinate(P2) node[circ]{};
+  \draw (4,5) node[circ]{}
+    to[R, l_={$R_T=100\,\Omega\; (\frac12\,\mathrm{W})$}]
+    (4,-1) node[circ]{};
+  \node[above left] at (P1) {P1};
+  \node[below left] at (P2) {P2};
 
-  % cable far-end load (the peer PHY / cable reflects ~100 ohm)
-  \draw[dashed] (8.0,1.6) to[R, l=$\approx\!100\,\Omega$] (8.0,-1.6);
-  \node[align=center, right] at (8.6,0) {to cable\\(far end)};
+  \draw (P1) to[L] (7,2) coordinate(P3) node[circ]{} to[L] (P2);
+  \node[above left] at (P3) {P3 (CT)};
+  \draw (P3) -- (8.2,2) -- (8.2,8) node[circ]{}
+    -- (8.2,8.5) node[vcc, align=center]{\textbf{VBUS +5 V}\\Pico pin 40};
+  \draw (8.2,8) -- (14,8);
+  \draw (11,8) node[circ]{} to[C, l_={$C_1=100\,\mathrm{nF}$}]
+    (11,6.8) node[ground]{};
+  \draw (14,8) to[C, l={$C_2=1\,\mu\mathrm{F}$}]
+    (14,6.8) node[ground]{};
 
-  %===================== Shield =====================
-  \draw (4.0,-2.7) node[left]{BOB SH} -- (4.0,-3.1) node[ground]{};
+  \draw[line width=0.6pt] (9.0,-0.7) -- (9.0,4.7);
+  \draw[line width=0.6pt] (9.15,-0.7) -- (9.15,4.7);
+  \draw (11,5) coordinate(st) to[L, mirror] (11,-1) coordinate(sb);
+  \fill (7.35,4.7) circle (1.5pt);
+  \fill (7.35,1.7) circle (1.5pt);
+  \fill (10.65,4.7) circle (1.5pt);
+  \node[align=center] at (9.1,-2.0)
+    {T1: MagJack\\1:1};
+
+  \draw (st) -- (15,5) node[ocirc]{} node[above]{RJ45 1};
+  \draw (sb) -- (15,-1) node[ocirc]{} node[below]{RJ45 2};
+  \draw (9,-3.5) node[left]{BOB SH} -- (9,-4.1) node[ground]{};
+  \draw (-5,-5) node[ocirc]{} node[left]{Pico GND}
+    -- (-5,-5.5) node[ground]{};
 
 \end{circuitikz}
 \end{document}

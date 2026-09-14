@@ -73,7 +73,7 @@ const tusb_desc_device_t desc_device = {
 };
 
 const std::uint8_t desc_fs_configuration[] = {
-    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
+    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 200),
     // itf, description str, MAC str, notif EP + size, data EP out/in + size,
     // max segment size, notification bInterval, NCM capabilities, number of
     // multicast filters we support (wNumberMCFilters), bmEthernetStatistics bitmap

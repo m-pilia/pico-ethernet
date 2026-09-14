@@ -17,6 +17,6 @@ refresh_compile_commands(
         "//src/phy/test:link_pulse_test": "",
         "//src/phy/test:phy_stats_test": "",
         "//src/phy/test:rx_frame_align_test": "",
-        "//src/phy/test:tx_emphasis_test": "",
+        "//src/phy/test:tx_reference_test": "",
     },
 )

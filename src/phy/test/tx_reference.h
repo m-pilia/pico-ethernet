@@ -10,13 +10,11 @@
 
 namespace pico_ethernet {
 
-// Reference (oracle) Manchester + pre-emphasis encoder for the PHY transmit path.
+// Reference (oracle) Manchester encoder for the PHY transmit path.
 
-// One transmitted half-bit: the 2-bit {TXP,TXN} level code plus the TXE emphasis
-// select (true = full amplitude, false = reduced tail).
+// One transmitted half-bit as its {TXP,TXN} level code.
 struct HalfBit {
     std::uint8_t level; // LEVEL_POS / LEVEL_NEG / LEVEL_IDLE
-    bool full;
 };
 
 // Encodes a frame as two half-bits per data bit, in transmission order. Returns

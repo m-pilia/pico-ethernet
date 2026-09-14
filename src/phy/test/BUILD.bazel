@@ -7,17 +7,17 @@ cc_library(
     srcs = ["tx_reference.cpp"],
     hdrs = ["tx_reference.h"],
     visibility = ["//src/phy:__subpackages__"],
-    deps = ["//src/phy:tx_emphasis"],
+    deps = ["//src/phy:tx_level"],
 )
 
 cc_test(
-    name = "tx_emphasis_test",
-    srcs = ["tx_emphasis_test.cpp"],
+    name = "tx_reference_test",
+    srcs = ["tx_reference_test.cpp"],
     deps = [
         "@googletest//:gtest",
         "@googletest//:gtest_main",
         ":tx_reference",
-        "//src/phy:tx_emphasis",
+        "//src/phy:tx_level",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )
@@ -93,7 +93,7 @@ cc_binary(
         "//src/phy:rx_frame_recover",
         "//src/phy:rx_pio",
         "//src/phy:rx_pio_config",
-        "//src/phy:tx_emphasis",
+        "//src/phy:tx_level",
         "//src/util:led_heartbeat",
         "@pico-sdk//src/rp2_common/hardware_clocks",
         "@pico-sdk//src/rp2_common/hardware_dma",
@@ -112,8 +112,7 @@ cc_binary(
     deps = [
         ":tx_reference",
         "//src/phy:phy_timing",
-        "//src/phy:tx_emphasis",
-        "//src/phy:tx_emphasis_pio",
+        "//src/phy:tx_level",
         "//src/phy:tx_level_pio",
         "//src/util:led_heartbeat",
         "@pico-sdk//src/rp2_common/hardware_clocks",

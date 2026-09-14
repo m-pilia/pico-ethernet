@@ -8,10 +8,9 @@ cc_library(
 )
 
 cc_library(
-    name = "tx_emphasis",
-    srcs = ["tx_emphasis.cpp"],
-    hdrs = ["tx_emphasis.h"],
-    visibility = ["//visibility:public"],
+    name = "tx_level",
+    hdrs = ["tx_level.h"],
+    visibility = ["//src/phy:__subpackages__"],
 )
 
 cc_library(
@@ -59,12 +58,6 @@ pico_generate_pio_header(
 )
 
 pico_generate_pio_header(
-    name = "tx_emphasis_pio",
-    srcs = ["tx_emphasis.pio"],
-    visibility = ["//src/phy:__subpackages__"],
-)
-
-pico_generate_pio_header(
     name = "rx_pio",
     srcs = ["rx.pio"],
     visibility = ["//src/phy:__subpackages__"],
@@ -82,8 +75,7 @@ cc_library(
         ":rx_pio",
         ":rx_pio_config",
         ":rx_slot_ring",
-        ":tx_emphasis",
-        ":tx_emphasis_pio",
+        ":tx_level",
         ":tx_level_pio",
         "//src/mac:ethernet_frame",
         "@pico-sdk//src/rp2_common/hardware_clocks",

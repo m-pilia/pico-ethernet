@@ -17,10 +17,9 @@
 #include "src/phy/phy_timing.h"
 #include "src/phy/rx_frame_recover.h"
 #include "src/phy/rx_pio_config.h"
-#include "src/phy/tx_emphasis.h"
+#include "src/phy/tx_level.h"
 
 #include "rx.pio.h"
-#include "tx_emphasis.pio.h"
 #include "tx_level.pio.h"
 
 namespace pico_ethernet {
@@ -33,7 +32,7 @@ Phy* s_rx_irq_phy{nullptr};
 
 Phy::Phy(const Pins& pins)
     : pins_{pins} {
-    // TXP/TXN must be adjacent so the LEVEL SM can drive them as one 2-pin SET
+    // TXP/TXN must be adjacent so the TX SM can drive them as one 2-pin SET
     // group; RXD/RXC must be adjacent so the RX SM can gate on RXC via IN base + 1.
     assert(pins_.txn == pins_.txp + 1);
     assert(pins_.rxc == pins_.rxd + 1);
@@ -42,32 +41,27 @@ Phy::Phy(const Pins& pins)
 bool Phy::initialize() {
     set_sys_clock_khz(SYS_CLOCK_HZ / 1000, true);
 
-    if (!pio_can_add_program(pio_, &tx_level_program) || !pio_can_add_program(pio_, &tx_emphasis_program) ||
-        !pio_can_add_program(pio_, &rx_manchester_program)) {
+    if (!pio_can_add_program(pio_, &tx_level_program) || !pio_can_add_program(pio_, &rx_manchester_program)) {
         return false;
     }
-    offset_level_ = static_cast<std::uint32_t>(pio_add_program(pio_, &tx_level_program));
-    offset_emphasis_ = static_cast<std::uint32_t>(pio_add_program(pio_, &tx_emphasis_program));
+    offset_tx_ = static_cast<std::uint32_t>(pio_add_program(pio_, &tx_level_program));
     offset_rx_ = static_cast<std::uint32_t>(pio_add_program(pio_, &rx_manchester_program));
 
-    const int sml{pio_claim_unused_sm(pio_, false)};
-    const int sme{pio_claim_unused_sm(pio_, false)};
+    const int smt{pio_claim_unused_sm(pio_, false)};
     const int smr{pio_claim_unused_sm(pio_, false)};
-    if (sml < 0 || sme < 0 || smr < 0) {
+    if (smt < 0 || smr < 0) {
         return false;
     }
-    sm_level_ = static_cast<std::uint32_t>(sml);
-    sm_emphasis_ = static_cast<std::uint32_t>(sme);
+    sm_tx_ = static_cast<std::uint32_t>(smt);
     sm_rx_ = static_cast<std::uint32_t>(smr);
 
-    dma_level_ = dma_claim_unused_channel(false);
-    dma_emphasis_ = dma_claim_unused_channel(false);
+    dma_tx_ = dma_claim_unused_channel(false);
     dma_rx_ = dma_claim_unused_channel(false);
-    if (dma_level_ < 0 || dma_emphasis_ < 0 || dma_rx_ < 0) {
+    if (dma_tx_ < 0 || dma_rx_ < 0) {
         return false;
     }
 
-    configure_state_machines();
+    configure_tx();
     configure_rx();
     force_idle();
     rearm_capture(rx_ring_.capture_slot());
@@ -80,7 +74,7 @@ bool Phy::initialize() {
     // Finalize each transmit (idle drive + receiver re-arm) in the TX-DMA completion
     // interrupt so the receiver comes back the instant our frame drains, rather than
     // waiting for the main loop.
-    dma_channel_set_irq0_enabled(dma_level_, true);
+    dma_channel_set_irq0_enabled(dma_tx_, true);
     irq_set_exclusive_handler(DMA_IRQ_0, &Phy::tx_dma_irq_handler);
     irq_set_enabled(DMA_IRQ_0, true);
 
@@ -88,37 +82,26 @@ bool Phy::initialize() {
     return true;
 }
 
-void Phy::configure_state_machines() {
+void Phy::configure_tx() {
     pio_gpio_init(pio_, pins_.txp);
     pio_gpio_init(pio_, pins_.txn);
-    pio_gpio_init(pio_, pins_.txe);
 
     // The default 4mA pad drive is too low to reach target differential amplitude.
-    for (const std::uint32_t pin : {pins_.txp, pins_.txn, pins_.txe}) {
+    for (const std::uint32_t pin : {pins_.txp, pins_.txn}) {
         gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_12MA);
         gpio_set_slew_rate(pin, GPIO_SLEW_RATE_FAST);
     }
 
-    pio_sm_set_consecutive_pindirs(pio_, sm_level_, pins_.txp, 2, true);
-    pio_sm_set_consecutive_pindirs(pio_, sm_emphasis_, pins_.txe, 1, true);
+    pio_sm_set_consecutive_pindirs(pio_, sm_tx_, pins_.txp, 2, true);
 
-    // LEVEL SM: SET group {TXP,TXN}; autopull the raw frame LSB-first (802.3),
-    // one octet per FIFO entry (8-bit DMA -> one byte per pull). /1 clock =
-    // 12 cycles/bit at 120 MHz.
-    level_cfg_ = tx_level_program_get_default_config(offset_level_);
-    sm_config_set_set_pins(&level_cfg_, pins_.txp, 2);
-    sm_config_set_out_shift(&level_cfg_, true, true, 8);
-    sm_config_set_clkdiv(&level_cfg_, 1.0f);
-    pio_sm_init(pio_, sm_level_, offset_level_, &level_cfg_);
-
-    // EMPHASIS SM: SET and OUT pin = TXE; autopull the packed emphasis bits
-    // LSB-first, one octet per FIFO entry.
-    emphasis_cfg_ = tx_emphasis_program_get_default_config(offset_emphasis_);
-    sm_config_set_set_pins(&emphasis_cfg_, pins_.txe, 1);
-    sm_config_set_out_pins(&emphasis_cfg_, pins_.txe, 1);
-    sm_config_set_out_shift(&emphasis_cfg_, true, true, 8);
-    sm_config_set_clkdiv(&emphasis_cfg_, 1.0f);
-    pio_sm_init(pio_, sm_emphasis_, offset_emphasis_, &emphasis_cfg_);
+    // SET group {TXP,TXN}; autopull the raw frame LSB-first (802.3), one octet per
+    // FIFO entry (8-bit DMA -> one byte per pull). /1 clock = 12 cycles/bit at
+    // 120 MHz.
+    tx_cfg_ = tx_level_program_get_default_config(offset_tx_);
+    sm_config_set_set_pins(&tx_cfg_, pins_.txp, 2);
+    sm_config_set_out_shift(&tx_cfg_, true, true, 8);
+    sm_config_set_clkdiv(&tx_cfg_, 1.0f);
+    pio_sm_init(pio_, sm_tx_, offset_tx_, &tx_cfg_);
 }
 
 void Phy::configure_rx() {
@@ -252,52 +235,32 @@ bool Phy::transmit(std::span<const std::uint8_t> wire_frame) {
 }
 
 void Phy::start_tx(const WireFrame& frame) {
-    const std::size_t len{frame.length};
-    // One emphasis bit per data bit, packed one octet per octet of frame, so both
-    // DMA channels move exactly len bytes.
-    compute_emphasis_bits(std::span(frame.bytes).first(len), std::span(tx_emphasis_).first(len));
+    // Reset the SM to the program start with a cleared FIFO and empty OSR so the
+    // frame's first bit is shifted from the start of its first octet.
+    pio_sm_set_enabled(pio_, sm_tx_, false);
+    pio_sm_clear_fifos(pio_, sm_tx_);
+    pio_sm_init(pio_, sm_tx_, offset_tx_, &tx_cfg_);
 
-    // Reset both SMs to the program start with cleared FIFOs so the two-SM phase
-    // is deterministic from the first bit.
-    pio_sm_set_enabled(pio_, sm_level_, false);
-    pio_sm_set_enabled(pio_, sm_emphasis_, false);
-    pio_sm_clear_fifos(pio_, sm_level_);
-    pio_sm_clear_fifos(pio_, sm_emphasis_);
-    pio_sm_init(pio_, sm_level_, offset_level_, &level_cfg_);
-    pio_sm_init(pio_, sm_emphasis_, offset_emphasis_, &emphasis_cfg_);
-
-    dma_channel_config cl{dma_channel_get_default_config(dma_level_)};
-    channel_config_set_transfer_data_size(&cl, DMA_SIZE_8);
-    channel_config_set_read_increment(&cl, true);
-    channel_config_set_write_increment(&cl, false);
-    channel_config_set_dreq(&cl, pio_get_dreq(pio_, sm_level_, true));
-    dma_channel_configure(dma_level_, &cl, &pio_->txf[sm_level_], frame.bytes.data(), len, false);
-
-    dma_channel_config ce{dma_channel_get_default_config(dma_emphasis_)};
-    channel_config_set_transfer_data_size(&ce, DMA_SIZE_8);
-    channel_config_set_read_increment(&ce, true);
-    channel_config_set_write_increment(&ce, false);
-    channel_config_set_dreq(&ce, pio_get_dreq(pio_, sm_emphasis_, true));
-    dma_channel_configure(dma_emphasis_, &ce, &pio_->txf[sm_emphasis_], tx_emphasis_.data(), len, false);
+    dma_channel_config c{dma_channel_get_default_config(dma_tx_)};
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
+    channel_config_set_dreq(&c, pio_get_dreq(pio_, sm_tx_, true));
+    dma_channel_configure(dma_tx_, &c, &pio_->txf[sm_tx_], frame.bytes.data(), frame.length, false);
 
     active_ = true;
-    // Enable both SMs on the same cycle (phase-locked dividers), then kick both
-    // DMA channels together. TXE-vs-polarity phase alignment is confirmed and
-    // trimmed on-target by the DBG_PADOUT self-test. The end-of-frame IRQ stays
-    // enabled through the transmit: our own carrier holds RXC high (no falling edge)
-    // until on_tx_complete() drives idle, and any capture is dropped by the active_
-    // guard in on_rx_eof().
-    pio_enable_sm_mask_in_sync(pio_, (1u << sm_level_) | (1u << sm_emphasis_));
-    dma_start_channel_mask(
-        (1u << static_cast<std::uint32_t>(dma_level_)) | (1u << static_cast<std::uint32_t>(dma_emphasis_)));
+    // The end-of-frame IRQ stays enabled through the transmit: our own carrier holds
+    // RXC high (no falling edge) until on_tx_complete() drives idle, and any capture
+    // is dropped by the active_ guard in on_rx_eof().
+    pio_sm_set_enabled(pio_, sm_tx_, true);
+    dma_channel_start(dma_tx_);
 }
 
 bool Phy::transmitting() const {
-    if (dma_level_ < 0) {
+    if (dma_tx_ < 0) {
         return false;
     }
-    return dma_channel_is_busy(dma_level_) || dma_channel_is_busy(dma_emphasis_) ||
-           !pio_sm_is_tx_fifo_empty(pio_, sm_level_) || !pio_sm_is_tx_fifo_empty(pio_, sm_emphasis_);
+    return dma_channel_is_busy(dma_tx_) || !pio_sm_is_tx_fifo_empty(pio_, sm_tx_);
 }
 
 void Phy::service() {
@@ -323,9 +286,9 @@ void Phy::tx_dma_irq_handler() {
 }
 
 void Phy::on_tx_complete() {
-    dma_channel_acknowledge_irq0(dma_level_);
+    dma_channel_acknowledge_irq0(dma_tx_);
 
-    // The DMA has handed off the last byte, but the PIO FIFOs and shifters still hold
+    // The DMA has handed off the last byte, but the PIO FIFO and shifter still hold
     // a few bytes; wait so force_idle() does not clip the tail of the frame. The FIFO
     // draining leaves up to one octet still shifting out of the OSR after the FIFO
     // reads empty, so add a two-octet margin before driving idle.
@@ -349,7 +312,7 @@ void Phy::on_tx_complete() {
 void Phy::force_idle() {
     // Drive the differential pair to 0 V (TP_IDL then line idle). Injected while
     // the SM is stalled on an empty FIFO, so the level holds until the next frame.
-    pio_sm_exec(pio_, sm_level_, pio_encode_set(pio_pins, LEVEL_IDLE));
+    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_IDLE));
 }
 
 void Phy::emit_nlp() {
@@ -358,9 +321,9 @@ void Phy::emit_nlp() {
     if (active_ || transmitting()) {
         return;
     }
-    pio_sm_exec(pio_, sm_level_, pio_encode_set(pio_pins, LEVEL_POS));
+    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_POS));
     busy_wait_at_least_cycles(PIO_CYCLES_PER_BIT);
-    pio_sm_exec(pio_, sm_level_, pio_encode_set(pio_pins, LEVEL_IDLE));
+    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_IDLE));
 }
 
 std::int64_t Phy::nlp_alarm_cb(alarm_id_t /*id*/, void* user) {

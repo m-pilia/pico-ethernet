@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: MIT
 ; Copyright (c) 2026 Martino Pilia
 ;
-; LEVEL state machine: 10BASE-T Manchester polarity on the differential pair
+; TX state machine: 10BASE-T Manchester polarity on the differential pair
 ; {TXP, TXN} from the raw wire-frame bits. SET pin group = {TXP, TXN} with TXP as
 ; the low bit; +Vdiff (Manchester H) = 0b01, -Vdiff (L) = 0b10, idle = 0b00.
 ; Manchester: bit 1 = L then H; bit 0 = H then L. Raw frame bytes are shifted out

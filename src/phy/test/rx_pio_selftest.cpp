@@ -32,7 +32,7 @@
 #include "src/phy/rx_frame_recover.h"
 #include "src/phy/rx_pio_config.h"
 #include "src/phy/test/tx_reference.h"
-#include "src/phy/tx_emphasis.h"
+#include "src/phy/tx_level.h"
 #include "src/util/led_heartbeat.h"
 
 #include "rx.pio.h"
@@ -65,8 +65,8 @@ constexpr std::size_t CORRUPT_OCTET{CORRUPT_HALFBIT / 2 / 8}; // first octet the
 // Writes one data bit as two Manchester half-bits (bit 1 = -V then +V; bit 0 =
 // +V then -V, matching the reference encoder) and returns the next half-bit index.
 std::size_t put_bit(std::span<HalfBit> halfbits, std::size_t h, bool one) {
-    halfbits[h] = {one ? LEVEL_NEG : LEVEL_POS, true};
-    halfbits[h + 1] = {one ? LEVEL_POS : LEVEL_NEG, true};
+    halfbits[h] = {one ? LEVEL_NEG : LEVEL_POS};
+    halfbits[h + 1] = {one ? LEVEL_POS : LEVEL_NEG};
     return h + 2;
 }
 

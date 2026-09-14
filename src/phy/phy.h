@@ -22,11 +22,10 @@
 namespace pico_ethernet {
 
 // Software 10BASE-T PHY. Transmit: serializes complete MAC wire frames as
-// Manchester symbols with pre-emphasis using two synchronized PIO state machines
-// -- LEVEL drives the differential pair {TXP, TXN}, EMPHASIS drives the
-// amplitude-select pin TXE -- each fed by its own DMA channel, and emits Normal
-// Link Pulses when the line is idle. Receive: a third PIO SM slices the RXD/RXC
-// comparator outputs back into octets via DMA into a pool of capture buffers; the
+// Manchester symbols on the differential pair {TXP, TXN} using one PIO state
+// machine fed by DMA, and emits Normal Link Pulses when the line is idle. Receive:
+// a second PIO SM slices the RXD/RXC comparator outputs back into octets via DMA
+// into a pool of capture buffers; the
 // RXC falling edge (end of frame) is finalized in an interrupt that hands the DMA
 // the next free buffer, and poll_rx() drains and recovers completed frames from the
 // main loop. The system clock is run at 120 MHz so a 50 ns half-bit is an exact 6
@@ -34,13 +33,12 @@ namespace pico_ethernet {
 class Phy {
   public:
     struct Pins {
-        std::uint32_t txp; // LEVEL SM SET-group bit 0
-        std::uint32_t txn; // LEVEL SM SET-group bit 1 (must be txp + 1)
-        std::uint32_t txe; // EMPHASIS SM SET/OUT pin
+        std::uint32_t txp; // TX SM SET-group bit 0
+        std::uint32_t txn; // TX SM SET-group bit 1 (must be txp + 1)
         std::uint32_t rxd; // RX SM IN base + JMP pin: data slicer
         std::uint32_t rxc; // RX SM IN base + 1: carrier detect (must be rxd + 1)
     };
-    static constexpr Pins DEFAULT_PINS{.txp = 2, .txn = 3, .txe = 4, .rxd = 8, .rxc = 9};
+    static constexpr Pins DEFAULT_PINS{.txp = 2, .txn = 3, .rxd = 8, .rxc = 9};
 
     // Outcome of a receive poll. `frame` aliases an internal buffer valid until the
     // next poll_rx() call.
@@ -96,7 +94,7 @@ class Phy {
     [[nodiscard]] std::uint32_t rx_pool_overflow() const { return rx_ring_.overflow(); }
 
   private:
-    void configure_state_machines();
+    void configure_tx();
     void configure_rx();
     void rearm_capture(std::size_t slot);
     void on_rx_eof();
@@ -110,17 +108,13 @@ class Phy {
 
     Pins pins_;
     PIO pio_{pio0};
-    std::uint32_t sm_level_{0};
-    std::uint32_t sm_emphasis_{0};
+    std::uint32_t sm_tx_{0};
     std::uint32_t sm_rx_{0};
-    std::uint32_t offset_level_{0};
-    std::uint32_t offset_emphasis_{0};
+    std::uint32_t offset_tx_{0};
     std::uint32_t offset_rx_{0};
-    pio_sm_config level_cfg_{};
-    pio_sm_config emphasis_cfg_{};
+    pio_sm_config tx_cfg_{};
     pio_sm_config rx_cfg_{};
-    int dma_level_{-1};
-    int dma_emphasis_{-1};
+    int dma_tx_{-1};
     int dma_rx_{-1};
 
     NlpScheduler nlp_{};
@@ -138,7 +132,6 @@ class Phy {
     std::atomic<std::size_t> tx_tail_{0};
     std::atomic<std::uint32_t> tx_last_end_us_{0}; // for interframe-gap spacing
 
-    std::array<std::uint8_t, WIRE_CAPACITY> tx_emphasis_{};
     std::atomic<bool> active_{false}; // set in start_tx (thread), cleared in on_tx_complete (IRQ)
 
     // The RX SM autopushes four recovered octets per 32-bit FIFO word; DMA lands

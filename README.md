@@ -62,6 +62,10 @@ bazelisk build --config=rp2350 //src/phy/test:rx_pio_selftest
 bazelisk build --config=rp2350 //src/phy/test:tx_pio_selftest
 ```
 
+Since the tests use a slower clock, it is recommended to disconnect power to
+the TX circuit (e.g. by unplugging the VBUS pin connection) to avoid holding
+the transformer under prolonged differential drive.
+
 ## Reading device statistics
 
 The firmware exposes TX and RX statistics over the standard

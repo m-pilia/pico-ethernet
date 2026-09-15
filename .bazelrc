@@ -57,3 +57,5 @@ test --test_output=errors
 
 # Suppress warnings from third party code
 build --output_filter='^//'
+
+try-import .bazelrc.user

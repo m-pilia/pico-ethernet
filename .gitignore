@@ -4,4 +4,5 @@
 /temp/
 __pycache__
 /tools/pkg
+.bazelrc.user
 .clangd

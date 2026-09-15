@@ -83,7 +83,7 @@ def main() -> int:
     if failed:
         print(
             f"FAIL: footprint exceeds baseline by more than {args.max_increase_pct}%. "
-            "If intended, re-run with --update to reset the baseline."
+            "If intended, run `uv run tools/update_binary_size_gate.py` to reset the baseline."
         )
         return 1
 

@@ -77,6 +77,39 @@ DEVICE_COUNTERS = (
     "host_backpressure",
 )
 
+# Kernel netdev ("<rx|tx>_<name>" from `ip -s -s -j link`) and root-qdisc counters.
+# Frames the host drops before they reach the Pico show up in the qdisc (usbnet
+# stops the queue under USB backpressure) or in tx_dropped.
+PICO_LINK_COUNTERS = (
+    "tx_packets",
+    "tx_errors",
+    "tx_dropped",
+    "tx_fifo_errors",
+    "rx_packets",
+    "rx_errors",
+    "rx_dropped",
+    "qdisc_packets",
+    "qdisc_drops",
+    "qdisc_requeues",
+    "qdisc_overlimits",
+)
+# The peer driver may fold frames its NIC flagged bad (CRC, alignment) into
+# rx_errors without the per-kind breakdown.
+PEER_LINK_COUNTERS = (
+    "rx_packets",
+    "rx_errors",
+    "rx_dropped",
+    "rx_missed_errors",
+    "rx_over_errors",
+    "rx_length_errors",
+    "rx_crc_errors",
+    "rx_frame_errors",
+    "rx_fifo_errors",
+    "tx_packets",
+    "tx_errors",
+    "tx_collisions",
+)
+
 
 def parse_mac(text):
     parts = text.replace("-", ":").split(":")
@@ -436,6 +469,68 @@ def read_device_counters(script_dir):
     return values
 
 
+def netns_prefix(in_netns):
+    return ["ip", "netns", "exec", NETNS] if in_netns else []
+
+
+def read_link_counters(iface, in_netns):
+    prefix = netns_prefix(in_netns)
+    link = sudo([*prefix, "ip", "-s", "-s", "-j", "link", "show", "dev", iface],
+                capture_output=True, text=True)
+    if link.returncode != 0:
+        return None
+    try:
+        counters = {f"{direction}_{name}": value
+                    for direction, stats in json.loads(link.stdout)[0].get("stats64", {}).items()
+                    for name, value in stats.items()}
+        qdisc = sudo([*prefix, "tc", "-s", "-j", "qdisc", "show", "dev", iface],
+                     capture_output=True, text=True)
+        if qdisc.returncode == 0:
+            # The root qdisc already aggregates its children (e.g. mq).
+            for q in json.loads(qdisc.stdout):
+                if q.get("root"):
+                    for name in ("packets", "drops", "requeues", "overlimits"):
+                        counters[f"qdisc_{name}"] = q.get(name, 0)
+    except (json.JSONDecodeError, IndexError):
+        return None
+    return counters
+
+
+def read_ethtool_stats(iface, in_netns):
+    """Driver-specific counters; None when the driver exposes none."""
+    out = sudo([*netns_prefix(in_netns), "ethtool", "-S", iface], capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    counters = {}
+    for line in out.stdout.splitlines():
+        name, sep, value = line.strip().rpartition(":")
+        value = value.strip()
+        if sep and value.lstrip("-").isdigit():
+            counters[name.strip()] = int(value)
+    return counters or None
+
+
+class CounterProbe:
+    """A counter source snapshotted around the traffic run. `keys` fixes the printed
+    counters; None prints every counter that changed (for driver-specific names)."""
+
+    def __init__(self, title, read, keys=None):
+        self.title = title
+        self.read = read
+        self.keys = keys
+        self.baseline = None
+        self.final = None
+
+    def snapshot_baseline(self):
+        self.baseline = self.read()
+
+    def snapshot_final(self):
+        self.final = self.read()
+
+    def print_delta(self):
+        print_counter_delta(self.title, self.baseline, self.final, self.keys)
+
+
 class WorkerHandle:
     def __init__(self, popen, on_event):
         self.popen = popen
@@ -612,6 +707,9 @@ def run_main(argv):
                    help="run until interrupted, printing only on failure")
     p.add_argument("--device-stats", action="store_true",
                    help="snapshot the Pico's counters before/after (detaches cdc_ncm)")
+    p.add_argument("--peer-stats", action="store_true",
+                   help="snapshot the peer's kernel counters and `ethtool -S` driver "
+                        "statistics before/after (not every driver exposes the latter)")
     args = p.parse_args(argv)
 
     if args.load <= 0 or args.load > 100:
@@ -639,6 +737,24 @@ def run_main(argv):
                   file=sys.stderr)
             return 1
 
+    pico = args.pico_interface
+    peer = args.peer_interface
+    probes = [
+        CounterProbe(f"Pico host interface {pico}",
+                     lambda: read_link_counters(pico, in_netns=False), PICO_LINK_COUNTERS),
+        # cdc_ncm reports NTBs sent (tx_ntbs; tx_packets / tx_ntbs = datagrams per
+        # NTB) and why each NTB was closed (tx_reason_*).
+        CounterProbe(f"Pico host driver statistics (ethtool -S {pico})",
+                     lambda: read_ethtool_stats(pico, in_netns=False)),
+    ]
+    if args.peer_stats:
+        probes += [
+            CounterProbe(f"peer interface {peer}",
+                         lambda: read_link_counters(peer, in_netns=True), PEER_LINK_COUNTERS),
+            CounterProbe(f"peer driver statistics (ethtool -S {peer})",
+                         lambda: read_ethtool_stats(peer, in_netns=True)),
+        ]
+
     overall_ok = True
     saved = None
     try:
@@ -651,6 +767,8 @@ def run_main(argv):
         if not wait_for_iface(args.pico_interface):
             print(f"error: {args.pico_interface} not present", file=sys.stderr)
             return 1
+        for probe in probes:
+            probe.snapshot_baseline()
         peer_mac = read_peer_mac(args.peer_interface)
         print(f"peer MAC {peer_mac}  ->  Pico MAC {args.pico_mac}   direction={args.direction}")
 
@@ -672,6 +790,11 @@ def run_main(argv):
             if not step_passes(per_stream, args.loss_threshold):
                 overall_ok = False
     finally:
+        # Before teardown (the peer leaves the namespace and drops link) and before
+        # the final device read, whose cdc_ncm detach recreates the Pico netdev and
+        # zeroes its counters.
+        for probe in probes:
+            probe.snapshot_final()
         teardown_environment(saved)
 
     if args.device_stats:
@@ -679,20 +802,27 @@ def run_main(argv):
             print(f"warning: {args.pico_interface} not back before final read",
                   file=sys.stderr)
         final = read_device_counters(script_dir)
-        print_device_delta(baseline, final)
+        print_counter_delta("Pico device counters", baseline, final, DEVICE_COUNTERS)
+    for probe in probes:
+        probe.print_delta()
 
     print(f"\nRESULT: {'PASS' if overall_ok else 'FAIL'}")
     return 0 if overall_ok else 1
 
 
-def print_device_delta(baseline, final):
-    print("\n=== Pico device counters (delta over the run) ===")
+def print_counter_delta(title, baseline, final, keys=None):
+    print(f"\n=== {title} (delta over the run) ===")
     if not baseline or not final:
         print("  unavailable")
         return
-    for key in DEVICE_COUNTERS:
+    if keys is None:
+        keys = [k for k in final if k in baseline and final[k] != baseline[k]]
+        if not keys:
+            print("  no counter changed")
+    width = max([22, *map(len, keys)])
+    for key in keys:
         if key in baseline and key in final:
-            print(f"  {key:<22} {final[key] - baseline[key]}")
+            print(f"  {key:<{width}} {final[key] - baseline[key]}")
 
 
 def main():

@@ -41,7 +41,13 @@ extern "C" {
 
 // IN (device->host) NTB sizing.
 #define CFG_TUD_NCM_IN_NTB_N 2
+#define CFG_TUD_NCM_IN_MAX_DATAGRAMS_PER_NTB 6
 #define CFG_TUD_NCM_IN_NTB_MAX_SIZE 6144 // 4 frames + 1KiB alignment
+
+// OUT (host->device) NTB sizing.
+#define CFG_TUD_NCM_OUT_NTB_N 2
+#define CFG_TUD_NCM_OUT_MAX_DATAGRAMS_PER_NTB 6
+#define CFG_TUD_NCM_OUT_NTB_MAX_SIZE 6144 // 4 frames + 1KiB alignment
 
 // Standard Ethernet MTU (frame payload up to 1514 bytes).
 #define CFG_TUD_NET_MTU 1514

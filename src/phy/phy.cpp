@@ -13,6 +13,7 @@
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
+#include "hardware/sync.h"
 
 #include "src/phy/phy_timing.h"
 #include "src/phy/rx_frame_recover.h"
@@ -252,9 +253,22 @@ void Phy::start_tx(const WireFrame& frame) {
     // The end-of-frame IRQ stays enabled through the transmit: our own carrier holds
     // RXC high (no falling edge) until on_tx_complete() drives idle, and any capture
     // is dropped by the active_ guard in on_rx_eof().
+    //
+    // The SM stalls on autopull until the first octet lands, which latches TXSTALL.
+    // Clear it once that octet is delivered so a TXSTALL seen in on_tx_complete()
+    // means a mid-frame FIFO underrun. Interrupts are masked so a long ISR cannot
+    // delay the clear past the end of the frame.
+    const std::uint32_t irq_state{save_and_disable_interrupts()};
     pio_sm_set_enabled(pio_, sm_tx_, true);
     dma_channel_start(dma_tx_);
+    while (dma_channel_hw_addr(dma_tx_)->transfer_count == frame.length) {
+        tight_loop_contents();
+    }
+    pio_->fdebug = tx_stall_mask();
+    restore_interrupts(irq_state);
 }
+
+std::uint32_t Phy::tx_stall_mask() const { return 1u << (PIO_FDEBUG_TXSTALL_LSB + sm_tx_); }
 
 bool Phy::transmitting() const {
     if (dma_tx_ < 0) {
@@ -287,6 +301,14 @@ void Phy::tx_dma_irq_handler() {
 
 void Phy::on_tx_complete() {
     dma_channel_acknowledge_irq0(dma_tx_);
+
+    // The DMA has just queued the final octets, so while the FIFO still holds data the
+    // SM cannot have stalled at the end of the frame: a TXSTALL then is an underrun.
+    // An empty FIFO here (IRQ latency beyond the queued tail) is not counted, so the
+    // count can miss underruns but never reports false ones.
+    const bool underrun{(pio_->fdebug & tx_stall_mask()) != 0u && !pio_sm_is_tx_fifo_empty(pio_, sm_tx_)};
+    std::atomic<std::uint32_t>& outcome{underrun ? tx_underrun_ : tx_sent_};
+    outcome.store(outcome.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 
     // The DMA has handed off the last byte, but the PIO FIFO and shifter still hold
     // a few bytes; wait so force_idle() does not clip the tail of the frame. The FIFO

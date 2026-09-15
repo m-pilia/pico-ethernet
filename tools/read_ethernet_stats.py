@@ -43,6 +43,7 @@ SELECTORS = {
     0x03: "xmit_error",
     0x04: "rcv_error",
     0x12: "rcv_crc_error",
+    0x1A: "xmit_underrun",
     # Private diagnostic selectors: the internal RX sub-counters that make up
     # rcv_error (see RxDiagnostic in src/phy/phy_stats.h).
     0xF0: "  bad_preamble",

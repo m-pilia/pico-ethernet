@@ -89,8 +89,10 @@ void UsbNetDevice::task() {
     // Move host frames the USB ISR queued into the PHY transmit path.
     drain_usb_tx();
 
-    // Mirror the interrupt-maintained pool-overflow counter into the RX stats.
+    // Mirror the interrupt-maintained PHY counters into the stats.
     rx_stats_.pool_overflow = phy_.rx_pool_overflow();
+    stats_.sent = phy_.tx_sent();
+    stats_.underrun = phy_.tx_underrun();
 
     // Drain recovered frames to the host, letting the NCM driver aggregate several
     // datagrams into one NTB per USB transfer. recover_frame (bit realignment + CRC
@@ -133,12 +135,10 @@ void UsbNetDevice::task() {
 void UsbNetDevice::drain_usb_tx() {
     // Retry a frame held over from a full PHY TX queue.
     if (tx_backpressured_) {
-        if (phy_.transmit(pending_tx_.view())) {
-            tx_backpressured_ = false;
-            ++stats_.accepted;
-        } else {
+        if (!phy_.transmit(pending_tx_.view())) {
             return; // PHY TX still congested; dequeueing more would just fail too
         }
+        tx_backpressured_ = false;
     }
 
     // Frame and transmit what the ISR queued, building each wire frame directly
@@ -166,7 +166,6 @@ void UsbNetDevice::drain_usb_tx() {
             tx_backpressured_ = true;
             return; // PHY TX full; pending_tx_ already holds the frame, stop draining
         }
-        ++stats_.accepted;
     }
 }
 

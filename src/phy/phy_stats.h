@@ -13,16 +13,17 @@
 namespace pico_ethernet {
 
 // Transmit-side outcome counters. Each field has a single writer so the reader in
-// the USB ISR (GET_ETHERNET_STATISTIC) needs no locking: accepted/build_failed are
-// written only on the main loop, usb_tx_overflow/oversize_dropped only in the USB
-// ISR (see UsbNetDevice). A naturally-aligned 32-bit counter with one writer is
-// read as a single coherent value on the Cortex-M33.
+// the USB ISR (GET_ETHERNET_STATISTIC) needs no locking: build_failed and the
+// sent/underrun mirrors of the PHY's counters are written only on the main loop,
+// usb_tx_overflow/oversize_dropped only in the USB ISR (see UsbNetDevice). A
+// naturally-aligned 32-bit counter with one writer is read as a single coherent
+// value on the Cortex-M33.
 struct TxStats {
-    std::uint32_t accepted{0};         // frames handed to the PHY
     std::uint32_t build_failed{0};     // host frame could not be framed (main loop)
-    std::uint32_t dropped_busy{0};     // PHY still transmitting a prior frame
     std::uint32_t usb_tx_overflow{0};  // host frame dropped: USB->PHY queue full under load (ISR)
     std::uint32_t oversize_dropped{0}; // host datagram larger than a wire frame; dropped in the ISR
+    std::uint32_t sent{0};             // frames fully clocked onto the wire without underrun
+    std::uint32_t underrun{0};         // frames corrupted by a mid-frame TX FIFO underrun
 };
 
 // Receive-side counters. The per-FrameError fields come out of the MAC parser
@@ -81,14 +82,16 @@ enum class EthernetStatistic : std::uint16_t {
     XmitError = 0x03,
     RcvError = 0x04,
     RcvCrcError = 0x12,
+    XmitUnderrun = 0x1A,
 };
 
-inline constexpr std::array<EthernetStatistic, 5> SUPPORTED_STATISTICS{
+inline constexpr std::array<EthernetStatistic, 6> SUPPORTED_STATISTICS{
     EthernetStatistic::XmitOk,
     EthernetStatistic::RcvOk,
     EthernetStatistic::XmitError,
     EthernetStatistic::RcvError,
     EthernetStatistic::RcvCrcError,
+    EthernetStatistic::XmitUnderrun,
 };
 
 // bmEthernetStatistics bitmap advertised in the Ethernet Networking Functional
@@ -102,22 +105,25 @@ inline constexpr std::uint32_t ETHERNET_STATISTICS_BITMAP{[] {
 }()};
 
 // Locks the exact bitmap that goes on the wire in the functional descriptor:
-// selectors 0x01..0x04 (bits 0..3) plus RCV_CRC_ERROR 0x12 (bit 17).
-static_assert(ETHERNET_STATISTICS_BITMAP == 0x0002'000Fu);
+// selectors 0x01..0x04 (bits 0..3), RCV_CRC_ERROR 0x12 (bit 17) and XMIT_UNDERRUN
+// 0x1A (bit 25).
+static_assert(ETHERNET_STATISTICS_BITMAP == 0x0202'000Fu);
 
 [[nodiscard]] constexpr std::optional<std::uint32_t>
 ethernet_statistic(EthernetStatistic selector, const TxStats& tx, const RxStats& rx) {
     switch (selector) {
         case EthernetStatistic::XmitOk:
-            return tx.accepted;
+            return tx.sent;
         case EthernetStatistic::RcvOk:
             return rx.delivered;
         case EthernetStatistic::XmitError:
-            return tx.build_failed + tx.dropped_busy + tx.usb_tx_overflow + tx.oversize_dropped;
+            return tx.build_failed + tx.usb_tx_overflow + tx.oversize_dropped + tx.underrun;
         case EthernetStatistic::RcvError:
             return rx.error_total();
         case EthernetStatistic::RcvCrcError:
             return rx.bad_fcs;
+        case EthernetStatistic::XmitUnderrun:
+            return tx.underrun;
     }
     return std::nullopt;
 }

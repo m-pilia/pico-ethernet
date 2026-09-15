@@ -93,6 +93,11 @@ class Phy {
     // (the drain fell behind line rate). A visible, counted drop, not a silent loss.
     [[nodiscard]] std::uint32_t rx_pool_overflow() const { return rx_ring_.overflow(); }
 
+    // Running counts of frames fully clocked onto the wire: clean ones, and ones
+    // where the TX FIFO ran dry mid-frame (the SM stalled, stretching a half-bit).
+    [[nodiscard]] std::uint32_t tx_sent() const { return tx_sent_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint32_t tx_underrun() const { return tx_underrun_.load(std::memory_order_relaxed); }
+
   private:
     void configure_tx();
     void configure_rx();
@@ -100,6 +105,7 @@ class Phy {
     void on_rx_eof();
     static void rx_irq_handler(uint gpio, std::uint32_t events);
     void start_tx(const WireFrame& frame);
+    [[nodiscard]] std::uint32_t tx_stall_mask() const;
     void on_tx_complete();
     static void tx_dma_irq_handler();
     void force_idle();
@@ -133,6 +139,10 @@ class Phy {
     std::atomic<std::uint32_t> tx_last_end_us_{0}; // for interframe-gap spacing
 
     std::atomic<bool> active_{false}; // set in start_tx (thread), cleared in on_tx_complete (IRQ)
+
+    // Written only in on_tx_complete() (TX-DMA interrupt).
+    std::atomic<std::uint32_t> tx_sent_{0};
+    std::atomic<std::uint32_t> tx_underrun_{0};
 
     // The RX SM autopushes four recovered octets per 32-bit FIFO word; DMA lands
     // them densely into the current pool buffer. A worst case capture is a

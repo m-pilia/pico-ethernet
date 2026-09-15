@@ -64,6 +64,7 @@ DEVICE_COUNTERS = (
     # TX
     "xmit_ok",
     "xmit_error",
+    "xmit_underrun",
     # RX aggregate + per-error sub-counters (RxDiagnostic in src/phy/phy_stats.h)
     "rcv_ok",
     "rcv_error",

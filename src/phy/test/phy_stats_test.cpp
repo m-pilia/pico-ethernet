@@ -48,7 +48,7 @@ TEST(RxStatsTest, ErrorTotalExcludesFilteredAndDelivered) {
 }
 
 TEST(EthernetStatisticTest, SelectorsMapToTheRightCounters) {
-    const TxStats tx{.accepted = 7, .build_failed = 2, .dropped_busy = 3};
+    const TxStats tx{.build_failed = 2, .usb_tx_overflow = 3, .sent = 7, .underrun = 1};
     RxStats rx{};
     rx.delivered = 11;
     rx.bad_fcs = 4;
@@ -57,9 +57,10 @@ TEST(EthernetStatisticTest, SelectorsMapToTheRightCounters) {
 
     EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitOk, tx, rx), 7u);
     EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvOk, tx, rx), 11u);
-    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitError, tx, rx), 5u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitError, tx, rx), 6u);
     EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvError, tx, rx), rx.error_total());
     EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvCrcError, tx, rx), 4u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitUnderrun, tx, rx), 1u);
 }
 
 TEST(EthernetStatisticTest, UnknownSelectorHasNoValue) {

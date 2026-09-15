@@ -233,6 +233,7 @@ def receiver_loop(sock, stop, deadline, stream, report_failures, grace):
     rx_deadline = deadline if deadline == float("inf") else deadline + grace
     sock.settimeout(0.2)
     received = corrupt = late = 0
+    wire_bits = 0
     expected = 0
     first = last = None
     while not stop.is_set() and time.time() < rx_deadline:
@@ -259,12 +260,13 @@ def receiver_loop(sock, stop, deadline, stream, report_failures, grace):
                 emit({"type": "failure", "kind": "loss", "stream": stream,
                       "from": expected, "to": seq - 1, "count": seq - expected})
             expected = seq + 1
+            wire_bits += wire_bytes(len(frame) - 14) * 8
         else:
             late += 1
     _tp_packets, tp_drops = struct.unpack("II", sock.getsockopt(SOL_PACKET, PACKET_STATISTICS, 8))
     emit({"type": "summary", "role": "receiver", "stream": stream,
           "received": received, "corrupt": corrupt, "late": late,
-          "first": first, "last": last, "host_drops": tp_drops})
+          "wire_bits": wire_bits, "first": first, "last": last, "host_drops": tp_drops})
 
 
 def worker_main(argv):
@@ -653,10 +655,15 @@ def aggregate(summaries):
         unique = received - late
         lost = max(sent - unique, 0)
         loss_pct = (100.0 * lost / sent) if sent else 0.0
+        # Over the sender's window, so it is directly comparable with offered_mbps.
+        achieved_mbps = (rx.get("wire_bits", 0) / elapsed / 1e6) if elapsed else 0.0
+        achieved_fps = (unique / elapsed) if elapsed else 0.0
         per_stream[stream] = {
             "sent": sent, "received": received, "unique": unique, "late": late,
             "corrupt": corrupt, "lost": lost, "loss_pct": loss_pct,
-            "offered_mbps": offered_mbps, "fps": fps, "host_drops": host_drops,
+            "offered_mbps": offered_mbps, "fps": fps,
+            "achieved_mbps": achieved_mbps, "achieved_fps": achieved_fps,
+            "host_drops": host_drops,
         }
     return per_stream
 
@@ -671,6 +678,7 @@ def print_step_result(per_stream):
               f"lost={s['lost']:<7} ({s['loss_pct']:.3f}%)  corrupt={s['corrupt']}  "
               f"late={s['late']}  offered={s['offered_mbps']:.2f}Mb/s ({s['fps']:.0f}fps)  "
               f"hostdrop={s['host_drops']}{note}")
+        print(f"  {'':<11} achieved={s['achieved_mbps']:.2f}Mb/s ({s['achieved_fps']:.0f}fps)")
 
 
 def step_passes(per_stream, loss_threshold):

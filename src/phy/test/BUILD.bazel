@@ -75,6 +75,23 @@ pico_generate_pio_header(
     srcs = ["rx_stimulus.pio"],
 )
 
+pico_generate_pio_header(
+    name = "pin_capture_pio",
+    srcs = ["pin_capture.pio"],
+)
+
+cc_library(
+    name = "pin_capture",
+    testonly = True,
+    hdrs = ["pin_capture.h"],
+    deps = [
+        ":pin_capture_pio",
+        "@pico-sdk//src/rp2_common/hardware_dma",
+        "@pico-sdk//src/rp2_common/hardware_pio",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
+)
+
 cc_binary(
     name = "rx_pio_selftest",
     testonly = True,

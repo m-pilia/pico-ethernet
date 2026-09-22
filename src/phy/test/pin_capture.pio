@@ -1,0 +1,14 @@
+; SPDX-License-Identifier: MIT
+; Copyright (c) 2026 Martino Pilia
+;
+; Test-only observer: records the levels present on a pin pair, one sample per PIO
+; cycle. IN base is the low pin of the pair, so a sample is the {TXP,TXN} level code
+; itself; sixteen samples fill a 32-bit word and are autopushed for DMA. Run at the
+; same /1 clock as the state machine under observation and started in lockstep with
+; it, one sample is one 120 MHz cycle, so run lengths in the capture are cycle counts.
+
+.program pin_capture
+
+.wrap_target
+    in pins, 2
+.wrap

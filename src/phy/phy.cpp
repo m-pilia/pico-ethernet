@@ -87,12 +87,6 @@ void Phy::configure_tx() {
     pio_gpio_init(pio_, pins_.txp);
     pio_gpio_init(pio_, pins_.txn);
 
-    // The default 4mA pad drive is too low to reach target differential amplitude.
-    for (const std::uint32_t pin : {pins_.txp, pins_.txn}) {
-        gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_12MA);
-        gpio_set_slew_rate(pin, GPIO_SLEW_RATE_FAST);
-    }
-
     pio_sm_set_consecutive_pindirs(pio_, sm_tx_, pins_.txp, 2, true);
 
     // SET group {TXP,TXN}; autopull the raw frame LSB-first (802.3), one octet per

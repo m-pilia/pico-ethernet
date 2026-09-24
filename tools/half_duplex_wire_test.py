@@ -34,6 +34,21 @@ import threading
 import time
 import zlib
 
+from wire_counters import (
+    DEVICE_COUNTERS,
+    PEER_LINK_COUNTERS,
+    PICO_LINK_COUNTERS,
+    CounterProbe,
+    capture_link,
+    print_counter_delta,
+    read_device_counters,
+    read_ethtool_stats,
+    read_link_counters,
+    restore_link,
+    sudo,
+    wait_for_iface,
+)
+
 ETHERTYPE = 0x88B5
 MAGIC = b"PWT1"
 PICO_MAC_DEFAULT = "02:00:00:00:00:01"
@@ -57,59 +72,6 @@ RCVBUF_BYTES = 16 * 1024 * 1024
 # Simple IMIX: seven small, four medium, one large, by payload length.
 IMIX_PAYLOADS = [MIN_PAYLOAD] * 7 + [576] * 4 + [MAX_PAYLOAD]
 
-# Labels as emitted by read_ethernet_stats.py (leading whitespace stripped by the
-# parser). Covers the full TX/RX outcome set, so a failing run localizes the TX drops
-# (xmit_error) and the RX per-error sub-counters.
-DEVICE_COUNTERS = (
-    # TX
-    "xmit_ok",
-    "xmit_error",
-    "xmit_underrun",
-    # RX aggregate + per-error sub-counters (RxDiagnostic in src/phy/phy_stats.h)
-    "rcv_ok",
-    "rcv_error",
-    "bad_preamble",
-    "runt",
-    "giant",
-    "bad_fcs",
-    "carrier_glitch",
-    "decode_error",
-    "pool_overflow",
-    "host_backpressure",
-)
-
-# Kernel netdev ("<rx|tx>_<name>" from `ip -s -s -j link`) and root-qdisc counters.
-# Frames the host drops before they reach the Pico show up in the qdisc (usbnet
-# stops the queue under USB backpressure) or in tx_dropped.
-PICO_LINK_COUNTERS = (
-    "tx_packets",
-    "tx_errors",
-    "tx_dropped",
-    "tx_fifo_errors",
-    "rx_packets",
-    "rx_errors",
-    "rx_dropped",
-    "qdisc_packets",
-    "qdisc_drops",
-    "qdisc_requeues",
-    "qdisc_overlimits",
-)
-# The peer driver may fold frames its NIC flagged bad (CRC, alignment) into
-# rx_errors without the per-kind breakdown.
-PEER_LINK_COUNTERS = (
-    "rx_packets",
-    "rx_errors",
-    "rx_dropped",
-    "rx_missed_errors",
-    "rx_over_errors",
-    "rx_length_errors",
-    "rx_crc_errors",
-    "rx_frame_errors",
-    "rx_fifo_errors",
-    "tx_packets",
-    "tx_errors",
-    "tx_collisions",
-)
 
 
 def parse_mac(text):
@@ -317,10 +279,6 @@ def worker_main(argv):
         sock.close()
 
 
-def sudo(cmd, **kwargs):
-    return subprocess.run(["sudo", *cmd], **kwargs)
-
-
 def read_peer_mac(iface):
     out = sudo(
         ["ip", "netns", "exec", NETNS, "cat", f"/sys/class/net/{iface}/address"],
@@ -329,39 +287,12 @@ def read_peer_mac(iface):
     return out.stdout.strip()
 
 
-def wait_for_iface(iface, timeout=15.0):
-    end = time.time() + timeout
-    while time.time() < end:
-        if os.path.exists(f"/sys/class/net/{iface}"):
-            return True
-        time.sleep(0.3)
-    return False
-
-
 OFFLOAD_FEATURES = {
     "gro": "generic-receive-offload",
     "gso": "generic-segmentation-offload",
     "tso": "tcp-segmentation-offload",
     "lro": "large-receive-offload",
 }
-
-
-def capture_link(iface):
-    out = sudo(["ethtool", iface], capture_output=True, text=True)
-    if out.returncode != 0:
-        return None
-    info = {}
-    for line in out.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("Speed:"):
-            digits = "".join(c for c in line.split(":", 1)[1] if c.isdigit())
-            if digits:
-                info["speed"] = digits
-        elif line.startswith("Duplex:"):
-            info["duplex"] = line.split(":", 1)[1].strip().lower()
-        elif line.startswith("Auto-negotiation:"):
-            info["autoneg"] = line.split(":", 1)[1].strip().lower()
-    return info if "autoneg" in info else None
 
 
 def capture_offloads(iface):
@@ -407,13 +338,7 @@ def restore_state(s):
     for short, value in s["offloads"].items():
         sudo(["ethtool", "-K", s["iface"], short, value], capture_output=True)
     if s["manage_link"]:
-        link = s["link"]
-        if link and link.get("autoneg") == "off" and "speed" in link and "duplex" in link:
-            sudo(["ethtool", "-s", s["iface"], "speed", link["speed"],
-                  "duplex", link["duplex"], "autoneg", "off"], capture_output=True)
-        else:
-            # Original was autoneg-on (or unreadable): undo the forced 10baseT/Half.
-            sudo(["ethtool", "-s", s["iface"], "autoneg", "on"], capture_output=True)
+        restore_link(s["iface"], s["link"])
     sudo(["ip", "link", "set", s["iface"], "up" if s["up"] else "down"], capture_output=True)
 
 
@@ -453,85 +378,6 @@ def teardown_environment(saved):
         print(f"warning: {peer} did not return to the default namespace; "
               "its settings were not restored", file=sys.stderr)
     restore_state(saved["pico"])
-
-
-def read_device_counters(script_dir):
-    reader = os.path.join(script_dir, "read_ethernet_stats.py")
-    proc = sudo([reader], capture_output=True, text=True)
-    if proc.returncode != 0:
-        print(f"warning: device-counter read failed: {proc.stderr.strip()}",
-              file=sys.stderr)
-        return None
-    values = {}
-    for line in proc.stdout.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[-1].isdigit():
-            label = parts[0]
-            if label in DEVICE_COUNTERS:
-                values[label] = int(parts[-1])
-    return values
-
-
-def netns_prefix(in_netns):
-    return ["ip", "netns", "exec", NETNS] if in_netns else []
-
-
-def read_link_counters(iface, in_netns):
-    prefix = netns_prefix(in_netns)
-    link = sudo([*prefix, "ip", "-s", "-s", "-j", "link", "show", "dev", iface],
-                capture_output=True, text=True)
-    if link.returncode != 0:
-        return None
-    try:
-        counters = {f"{direction}_{name}": value
-                    for direction, stats in json.loads(link.stdout)[0].get("stats64", {}).items()
-                    for name, value in stats.items()}
-        qdisc = sudo([*prefix, "tc", "-s", "-j", "qdisc", "show", "dev", iface],
-                     capture_output=True, text=True)
-        if qdisc.returncode == 0:
-            # The root qdisc already aggregates its children (e.g. mq).
-            for q in json.loads(qdisc.stdout):
-                if q.get("root"):
-                    for name in ("packets", "drops", "requeues", "overlimits"):
-                        counters[f"qdisc_{name}"] = q.get(name, 0)
-    except (json.JSONDecodeError, IndexError):
-        return None
-    return counters
-
-
-def read_ethtool_stats(iface, in_netns):
-    """Driver-specific counters; None when the driver exposes none."""
-    out = sudo([*netns_prefix(in_netns), "ethtool", "-S", iface], capture_output=True, text=True)
-    if out.returncode != 0:
-        return None
-    counters = {}
-    for line in out.stdout.splitlines():
-        name, sep, value = line.strip().rpartition(":")
-        value = value.strip()
-        if sep and value.lstrip("-").isdigit():
-            counters[name.strip()] = int(value)
-    return counters or None
-
-
-class CounterProbe:
-    """A counter source snapshotted around the traffic run. `keys` fixes the printed
-    counters; None prints every counter that changed (for driver-specific names)."""
-
-    def __init__(self, title, read, keys=None):
-        self.title = title
-        self.read = read
-        self.keys = keys
-        self.baseline = None
-        self.final = None
-
-    def snapshot_baseline(self):
-        self.baseline = self.read()
-
-    def snapshot_final(self):
-        self.final = self.read()
-
-    def print_delta(self):
-        print_counter_delta(self.title, self.baseline, self.final, self.keys)
 
 
 class WorkerHandle:
@@ -733,14 +579,13 @@ def run_main(argv):
         return 1
 
     parse_mac(args.pico_mac)  # validate format before spawning workers
-    script_dir = os.path.dirname(os.path.abspath(__file__))
 
     print("Caching sudo credentials (needed for namespace/socket setup)...")
     sudo(["-v"], check=True)
 
     baseline = None
     if args.device_stats:
-        baseline = read_device_counters(script_dir)
+        baseline = read_device_counters()
         if not wait_for_iface(args.pico_interface):
             print(f"error: {args.pico_interface} did not reappear after counter read",
                   file=sys.stderr)
@@ -750,18 +595,18 @@ def run_main(argv):
     peer = args.peer_interface
     probes = [
         CounterProbe(f"Pico host interface {pico}",
-                     lambda: read_link_counters(pico, in_netns=False), PICO_LINK_COUNTERS),
+                     lambda: read_link_counters(pico, netns=None), PICO_LINK_COUNTERS),
         # cdc_ncm reports NTBs sent (tx_ntbs; tx_packets / tx_ntbs = datagrams per
         # NTB) and why each NTB was closed (tx_reason_*).
         CounterProbe(f"Pico host driver statistics (ethtool -S {pico})",
-                     lambda: read_ethtool_stats(pico, in_netns=False)),
+                     lambda: read_ethtool_stats(pico, netns=None)),
     ]
     if args.peer_stats:
         probes += [
             CounterProbe(f"peer interface {peer}",
-                         lambda: read_link_counters(peer, in_netns=True), PEER_LINK_COUNTERS),
+                         lambda: read_link_counters(peer, netns=NETNS), PEER_LINK_COUNTERS),
             CounterProbe(f"peer driver statistics (ethtool -S {peer})",
-                         lambda: read_ethtool_stats(peer, in_netns=True)),
+                         lambda: read_ethtool_stats(peer, netns=NETNS)),
         ]
 
     overall_ok = True
@@ -810,28 +655,13 @@ def run_main(argv):
         if not wait_for_iface(args.pico_interface):
             print(f"warning: {args.pico_interface} not back before final read",
                   file=sys.stderr)
-        final = read_device_counters(script_dir)
+        final = read_device_counters()
         print_counter_delta("Pico device counters", baseline, final, DEVICE_COUNTERS)
     for probe in probes:
         probe.print_delta()
 
     print(f"\nRESULT: {'PASS' if overall_ok else 'FAIL'}")
     return 0 if overall_ok else 1
-
-
-def print_counter_delta(title, baseline, final, keys=None):
-    print(f"\n=== {title} (delta over the run) ===")
-    if not baseline or not final:
-        print("  unavailable")
-        return
-    if keys is None:
-        keys = [k for k in final if k in baseline and final[k] != baseline[k]]
-        if not keys:
-            print("  no counter changed")
-    width = max([22, *map(len, keys)])
-    for key in keys:
-        if key in baseline and key in final:
-            print(f"  {key:<{width}} {final[key] - baseline[key]}")
 
 
 def main():

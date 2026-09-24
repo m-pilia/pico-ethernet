@@ -23,6 +23,22 @@ inline constexpr std::uint32_t SLOT_TIME_NS{SLOT_TIME_BITS * BIT_TIME_NS};
 inline constexpr std::uint32_t JAM_BITS{32};
 inline constexpr std::uint32_t MAX_TX_ATTEMPTS{16};
 
+// The truncation point of the binary exponential backoff: after the n-th collision
+// the draw spans [0, 2^min(n, BACKOFF_TRUNCATION) - 1] slot times.
+inline constexpr std::uint32_t BACKOFF_TRUNCATION{10};
+
+// Neither gap is a whole number of microseconds (9.6 and 51.2), and the deferral
+// timers run on the 1 us system timer, so both round up: waiting marginally longer
+// than the standard requires is always legal, waiting less is not.
+inline constexpr std::uint32_t IFG_US{(IFG_NS + 999) / 1000};
+inline constexpr std::uint32_t SLOT_TIME_US{(SLOT_TIME_NS + 999) / 1000};
+
+// How long a carrier seen while we transmit must stay asserted before it counts as a
+// collision. It has to outlast a link pulse together with the tail the RC filter on
+// RXC adds to it, and stay well short of the shortest carrier a colliding station
+// produces (its preamble and SFD, then the jam).
+inline constexpr std::uint32_t CARRIER_QUALIFY_US{4};
+
 // Normal Link Pulse: one ~100 ns positive pulse every 16 ms +/- 8 ms when idle.
 inline constexpr std::uint32_t NLP_PERIOD_MS{16};
 inline constexpr std::uint32_t NLP_JITTER_MS{NLP_PERIOD_MS / 2};
@@ -32,6 +48,19 @@ inline constexpr std::uint32_t NLP_PULSE_NS{BIT_TIME_NS};
 // data.
 inline constexpr std::uint32_t LINK_LOSS_MIN_MS{50};
 inline constexpr std::uint32_t LINK_LOSS_MAX_MS{150};
+inline constexpr std::uint32_t LINK_LOSS_MS{100};
+inline constexpr std::uint32_t LINK_LOSS_US{LINK_LOSS_MS * 1000};
+static_assert(LINK_LOSS_MS >= LINK_LOSS_MIN_MS && LINK_LOSS_MS <= LINK_LOSS_MAX_MS);
+
+// Consecutive link-activity events needed to declare the link up. Clause 14 allows
+// 2 to 10; three tolerates a lost pulse without letting a lone noise blip flap the
+// host's link state.
+inline constexpr std::uint32_t LINK_UP_EVENTS{3};
+
+// A link pulse due while the medium is busy is held back rather than corrupting the
+// frame in flight, and retried this soon -- an order of magnitude below the cadence
+// itself, so a busy line barely shifts the pulse train.
+inline constexpr std::uint32_t NLP_RETRY_MS{1};
 
 // The system PLL is run at 120 MHz (an underclock, not an overclock) so that a
 // 50 ns half-bit is an integer number of PIO cycles: 120 MHz * 50 ns = 6 cycles.

@@ -21,9 +21,9 @@ namespace pico_ethernet {
 // Application-layer wrapper over TinyUSB's CDC-NCM net class driver. Owns the USB
 // device lifecycle and the RX packet filter, and bridges the host to the software
 // PHY: frames the host sends over USB are built into wire frames and handed to
-// the PHY transmit path. The wire-to-host receive path is added with the PHY RX
-// bring-up; until then the device-to-host direction is empty. The error-prone USB
-// plumbing (descriptors, endpoints, notifications) lives in TinyUSB.
+// the PHY transmit path, and frames the PHY receives are filtered and passed back
+// to the host. The error-prone USB plumbing (descriptors, endpoints, notifications)
+// lives in TinyUSB.
 //
 // USB is serviced from the USB controller interrupt: a shared USBCTRL_IRQ handler
 // runs tud_task_ext() so host events are handled the instant they occur, rather
@@ -48,8 +48,6 @@ class UsbNetDevice {
     // from the interrupt, not here.
     void task();
 
-    void set_link_up(bool up);
-    bool link_up() const { return link_up_; }
     const MacAddress& mac_address() const { return mac_address_; }
     const TxStats& tx_stats() const { return stats_; }
     const RxStats& rx_stats() const { return rx_stats_; }
@@ -69,6 +67,10 @@ class UsbNetDevice {
     [[nodiscard]] bool on_get_statistic(std::uint16_t selector, std::uint32_t& value) const;
 
   private:
+    // Notifies the host when the wire-driven link state changes. The first call
+    // always notifies, so the host learns the initial state.
+    void publish_link_state(bool up);
+
     // Applies the destination filter to a byte-aligned, FCS-delimited frame from
     // the PHY and, on acceptance, strips the FCS and hands the host-facing frame to
     // the NCM transmit path (appended as a datagram to the current NTB).
@@ -81,16 +83,11 @@ class UsbNetDevice {
     MacAddress mac_address_;
     Phy& phy_;
     bool link_up_{false};
+    bool link_state_published_{false};
     FrameFilter filter_;
     TxStats stats_{};
     RxStats rx_stats_{};
     std::span<const std::uint8_t> pending_host_frame_{};
-
-    // A host frame built while the PHY TX queue was full: held here and retried from
-    // drain_usb_tx() once a slot frees. PHY-TX backpressure (main-loop only); the
-    // host keeps flowing since the ISR always re-arms USB reception.
-    WireFrame pending_tx_{};
-    bool tx_backpressured_{false};
 
     // SPSC queue of raw host frames bridging the USB ISR (producer) to the main
     // loop (consumer). Single-producer/single-consumer: the ISR owns usb_tx_head_,

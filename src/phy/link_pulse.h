@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "src/phy/phy_timing.h"
+#include "src/util/random.h"
 
 namespace pico_ethernet {
 
@@ -19,18 +20,16 @@ namespace pico_ethernet {
 class NlpScheduler {
   public:
     explicit constexpr NlpScheduler(std::uint32_t seed = 0x1234'5678u)
-        : rng_{seed != 0 ? seed : 1u} {}
+        : rng_{seed} {}
 
     // Next inter-pulse interval, uniform in
     // [NLP_PERIOD_MS - NLP_JITTER_MS, NLP_PERIOD_MS + NLP_JITTER_MS].
     [[nodiscard]] constexpr std::uint32_t next_interval_ms() {
-        rng_ = rng_ * 1664525u + 1013904223u; // Numerical Recipes LCG
-        constexpr std::uint32_t span{2 * NLP_JITTER_MS + 1};
-        return NLP_PERIOD_MS - NLP_JITTER_MS + (rng_ >> 16) % span;
+        return NLP_PERIOD_MS - NLP_JITTER_MS + rng_.below(2 * NLP_JITTER_MS + 1);
     }
 
   private:
-    std::uint32_t rng_;
+    Lcg rng_;
 };
 
 } // namespace pico_ethernet

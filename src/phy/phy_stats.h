@@ -26,6 +26,21 @@ struct TxStats {
     std::uint32_t underrun{0};         // frames corrupted by a mid-frame TX FIFO underrun
 };
 
+// Half-duplex transmit outcomes, tallied per frame once its fate is decided, which
+// is what the CDC collision selectors mean: a frame is counted at most once, by how
+// many collisions it took rather than by how many collisions occurred. Written only
+// on the main loop and read by the USB ISR (GET_ETHERNET_STATISTIC); single-writer
+// aligned 32-bit access needs no lock (see TxStats).
+struct CsmaStats {
+    std::uint32_t deferred{0};             // first attempt had to wait for a busy medium
+    std::uint32_t single_collision{0};     // sent after exactly one collision
+    std::uint32_t multiple_collisions{0};  // sent after two or more
+    std::uint32_t excessive_collisions{0}; // abandoned after MAX_TX_ATTEMPTS attempts
+    std::uint32_t late_collisions{0};      // collision past the slot time; dropped, never retried
+    std::uint32_t link_down_dropped{0};    // queued frame discarded because the link went down
+    std::uint32_t link_transitions{0};     // link up/down changes reported to the host
+};
+
 // Receive-side counters. The per-FrameError fields come out of the MAC parser
 // unchanged; decode_error and carrier_glitch are PHY-level events with no MAC
 // equivalent (a Manchester code violation, and carrier that never yielded a
@@ -82,16 +97,26 @@ enum class EthernetStatistic : std::uint16_t {
     XmitError = 0x03,
     RcvError = 0x04,
     RcvCrcError = 0x12,
+    XmitOneCollision = 0x15,
+    XmitMoreCollisions = 0x16,
+    XmitDeferred = 0x17,
+    XmitMaxCollisions = 0x18,
     XmitUnderrun = 0x1A,
+    XmitLateCollisions = 0x1D,
 };
 
-inline constexpr std::array<EthernetStatistic, 6> SUPPORTED_STATISTICS{
+inline constexpr std::array<EthernetStatistic, 11> SUPPORTED_STATISTICS{
     EthernetStatistic::XmitOk,
     EthernetStatistic::RcvOk,
     EthernetStatistic::XmitError,
     EthernetStatistic::RcvError,
     EthernetStatistic::RcvCrcError,
+    EthernetStatistic::XmitOneCollision,
+    EthernetStatistic::XmitMoreCollisions,
+    EthernetStatistic::XmitDeferred,
+    EthernetStatistic::XmitMaxCollisions,
     EthernetStatistic::XmitUnderrun,
+    EthernetStatistic::XmitLateCollisions,
 };
 
 // bmEthernetStatistics bitmap advertised in the Ethernet Networking Functional
@@ -105,33 +130,51 @@ inline constexpr std::uint32_t ETHERNET_STATISTICS_BITMAP{[] {
 }()};
 
 // Locks the exact bitmap that goes on the wire in the functional descriptor:
-// selectors 0x01..0x04 (bits 0..3), RCV_CRC_ERROR 0x12 (bit 17) and XMIT_UNDERRUN
-// 0x1A (bit 25).
-static_assert(ETHERNET_STATISTICS_BITMAP == 0x0202'000Fu);
+// selectors 0x01..0x04 (bits 0..3), RCV_CRC_ERROR 0x12 (bit 17), the collision and
+// deferral selectors 0x15..0x18 (bits 20..23), XMIT_UNDERRUN 0x1A (bit 25) and
+// XMIT_LATE_COLLISIONS 0x1D (bit 28).
+static_assert(ETHERNET_STATISTICS_BITMAP == 0x12F2'000Fu);
 
 [[nodiscard]] constexpr std::optional<std::uint32_t>
-ethernet_statistic(EthernetStatistic selector, const TxStats& tx, const RxStats& rx) {
+ethernet_statistic(EthernetStatistic selector, const TxStats& tx, const RxStats& rx, const CsmaStats& csma) {
     switch (selector) {
         case EthernetStatistic::XmitOk:
             return tx.sent;
         case EthernetStatistic::RcvOk:
             return rx.delivered;
         case EthernetStatistic::XmitError:
-            return tx.build_failed + tx.usb_tx_overflow + tx.oversize_dropped + tx.underrun;
+            return tx.build_failed + tx.usb_tx_overflow + tx.oversize_dropped + tx.underrun +
+                   csma.excessive_collisions + csma.late_collisions + csma.link_down_dropped;
         case EthernetStatistic::RcvError:
             return rx.error_total();
         case EthernetStatistic::RcvCrcError:
             return rx.bad_fcs;
+        case EthernetStatistic::XmitOneCollision:
+            return csma.single_collision;
+        case EthernetStatistic::XmitMoreCollisions:
+            return csma.multiple_collisions;
+        case EthernetStatistic::XmitDeferred:
+            return csma.deferred;
+        case EthernetStatistic::XmitMaxCollisions:
+            return csma.excessive_collisions;
         case EthernetStatistic::XmitUnderrun:
             return tx.underrun;
+        case EthernetStatistic::XmitLateCollisions:
+            return csma.late_collisions;
     }
     return std::nullopt;
 }
 
-// Private selectors (outside the CDC-assigned range) that break the aggregate
-// rcv_error down into its internal RX sub-counters, read through the same
+// Selectors for counters CDC has no code for: the RX sub-counters behind the
+// aggregate rcv_error, and the link events. Read through the same
 // GET_ETHERNET_STATISTIC request so no debug UART is needed to diagnose losses.
-enum class RxDiagnostic : std::uint16_t {
+//
+// These codes lie in the range USB-IF reserves for future CDC assignment, which is
+// a deliberate deviation: the bmEthernetStatistics bitmap is 32 bits wide and can
+// only ever advertise selectors 0x01..0x20, so a private counter cannot be
+// advertised at all. No conformant host issues an unadvertised selector, and every
+// unknown one is still stalled.
+enum class Diagnostic : std::uint16_t {
     BadPreamble = 0xF0,
     Runt = 0xF1,
     Giant = 0xF2,
@@ -140,37 +183,44 @@ enum class RxDiagnostic : std::uint16_t {
     DecodeError = 0xF5,
     PoolOverflow = 0xF6,
     HostBackpressure = 0xF7,
+    LinkDownDropped = 0xF8,
+    LinkTransitions = 0xF9,
 };
 
-[[nodiscard]] constexpr std::optional<std::uint32_t> rx_diagnostic(std::uint16_t selector, const RxStats& rx) {
-    switch (static_cast<RxDiagnostic>(selector)) {
-        case RxDiagnostic::BadPreamble:
+[[nodiscard]] constexpr std::optional<std::uint32_t>
+diagnostic(std::uint16_t selector, const RxStats& rx, const CsmaStats& csma) {
+    switch (static_cast<Diagnostic>(selector)) {
+        case Diagnostic::BadPreamble:
             return rx.bad_preamble;
-        case RxDiagnostic::Runt:
+        case Diagnostic::Runt:
             return rx.runt;
-        case RxDiagnostic::Giant:
+        case Diagnostic::Giant:
             return rx.giant;
-        case RxDiagnostic::BadFcs:
+        case Diagnostic::BadFcs:
             return rx.bad_fcs;
-        case RxDiagnostic::CarrierGlitch:
+        case Diagnostic::CarrierGlitch:
             return rx.carrier_glitch;
-        case RxDiagnostic::DecodeError:
+        case Diagnostic::DecodeError:
             return rx.decode_error;
-        case RxDiagnostic::PoolOverflow:
+        case Diagnostic::PoolOverflow:
             return rx.pool_overflow;
-        case RxDiagnostic::HostBackpressure:
+        case Diagnostic::HostBackpressure:
             return rx.host_backpressure;
+        case Diagnostic::LinkDownDropped:
+            return csma.link_down_dropped;
+        case Diagnostic::LinkTransitions:
+            return csma.link_transitions;
     }
     return std::nullopt;
 }
 
 [[nodiscard]] constexpr std::optional<std::uint32_t>
-ethernet_statistic(std::uint16_t selector, const TxStats& tx, const RxStats& rx) {
+ethernet_statistic(std::uint16_t selector, const TxStats& tx, const RxStats& rx, const CsmaStats& csma) {
     if (const std::optional<std::uint32_t> standard{
-            ethernet_statistic(static_cast<EthernetStatistic>(selector), tx, rx)}) {
+            ethernet_statistic(static_cast<EthernetStatistic>(selector), tx, rx, csma)}) {
         return standard;
     }
-    return rx_diagnostic(selector, rx);
+    return diagnostic(selector, rx, csma);
 }
 
 } // namespace pico_ethernet

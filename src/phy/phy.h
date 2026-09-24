@@ -15,7 +15,10 @@
 #include "pico/stdlib.h" // IWYU pragma: keep  (alarm_id_t, repeating timers)
 
 #include "src/mac/ethernet_frame.h"
+#include "src/phy/csma_cd.h"
 #include "src/phy/link_pulse.h"
+#include "src/phy/link_state.h"
+#include "src/phy/phy_stats.h"
 #include "src/phy/rx_pio_config.h"
 #include "src/phy/rx_slot_ring.h"
 
@@ -30,6 +33,14 @@ namespace pico_ethernet {
 // the next free buffer, and poll_rx() drains and recovers completed frames from the
 // main loop. The system clock is run at 120 MHz so a 50 ns half-bit is an exact 6
 // PIO cycles.
+//
+// The station is half-duplex: RXC is carrier sense as well as end-of-frame, so
+// transmission defers to an occupied medium, and a carrier that appears mid-transmit
+// and stays asserted for CARRIER_QUALIFY_US is a collision. Both are routed through
+// CsmaCd, which decides deferral, backoff and abandonment; this class performs the
+// hardware actions those decisions call for.
+// RXC activity also feeds LinkState, whose up/down verdict the host-facing link
+// notification follows.
 class Phy {
   public:
     struct Pins {
@@ -54,7 +65,10 @@ class Phy {
         FrameError error{};                    // valid when Kind::Error
     };
 
-    explicit Phy(const Pins& pins = DEFAULT_PINS);
+    // `backoff_seed` seeds the collision backoff draw. Two stations sharing a seed
+    // would redraw the same backoff after every collision and keep colliding, so it
+    // must differ per device; it is a parameter so a test can pin the series.
+    explicit Phy(std::uint32_t backoff_seed, const Pins& pins = DEFAULT_PINS);
 
     Phy(const Phy&) = delete;
     Phy& operator=(const Phy&) = delete;
@@ -65,19 +79,25 @@ class Phy {
     // resources could not be claimed.
     [[nodiscard]] bool initialize();
 
-    // Enqueues a complete wire frame (preamble..FCS) for transmission. The bytes
-    // are copied into the TX queue, so the span need not outlive the call. Returns
-    // false if the queue is full (the caller should apply backpressure) or the frame
-    // is empty or larger than a wire frame. Queued frames are clocked out one at a
-    // time by service(), spaced by the interframe gap.
-    [[nodiscard]] bool transmit(std::span<const std::uint8_t> wire_frame);
+    // The queue slot to build the next wire frame (preamble..FCS) into, or nullptr
+    // when the queue is full and the caller must apply backpressure. Non-owning, and
+    // valid until commit_tx() enqueues it. The slot still holds the bytes of an
+    // earlier frame, so the builder must write every byte it then counts in `length`.
+    [[nodiscard]] WireFrame* tx_slot();
+
+    // Enqueues the slot tx_slot() returned, once it holds a complete wire frame.
+    // Queued frames are clocked out one at a time by service(), subject to carrier
+    // sense and the interframe gap.
+    void commit_tx();
 
     // True while a frame is being clocked out.
     [[nodiscard]] bool transmitting() const;
 
-    // Starts the next queued frame when the transmitter is idle and the interframe
-    // gap has elapsed. End-of-transmit finalization (idle drive, receiver re-arm)
-    // is handled in the TX-DMA completion interrupt, not here. Call from the loop.
+    // Drives the transmit side and the link timer: resolves the attempt that just
+    // ended, starts the next queued frame once CSMA/CD allows it, and discards
+    // queued frames while the link is down. Collision response (abort, jam) happens
+    // in the carrier-qualification interrupt, and end-of-transmit finalization in
+    // the TX-DMA completion interrupt, not here. Call from the loop.
     void service();
 
     // Dequeues one frame the end-of-frame interrupt captured, recovers it in a
@@ -89,6 +109,11 @@ class Phy {
     // recovering it. Lets the drain test for work before touching the USB path.
     [[nodiscard]] bool rx_pending() const { return rx_ring_.peek().has_value(); }
 
+    // The link integrity verdict: whether enough link activity has arrived recently
+    // for the line to count as connected. Follows the wire, so it is false until a
+    // peer is seen. Main-loop state, updated by service().
+    [[nodiscard]] bool link_up() const { return link_.up(); }
+
     // Running count of frames dropped because the receive buffer pool was exhausted
     // (the drain fell behind line rate). A visible, counted drop, not a silent loss.
     [[nodiscard]] std::uint32_t rx_pool_overflow() const { return rx_ring_.overflow(); }
@@ -98,26 +123,42 @@ class Phy {
     [[nodiscard]] std::uint32_t tx_sent() const { return tx_sent_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint32_t tx_underrun() const { return tx_underrun_.load(std::memory_order_relaxed); }
 
+    [[nodiscard]] const CsmaStats& csma_stats() const { return csma_stats_; }
+
   private:
     void configure_tx();
     void configure_rx();
+    void configure_carrier_qualify();
     void rearm_capture(std::size_t slot);
     void on_rx_eof();
-    static void rx_irq_handler(uint gpio, std::uint32_t events);
+    void on_carrier_assert();
+    void on_carrier_qualified();
+    static void carrier_qualified_irq_handler();
+    void on_collision();
+    static void carrier_irq_handler(uint gpio, std::uint32_t events);
+    // Both run with interrupts masked, by service().
+    void advance_tx();
     void start_tx(const WireFrame& frame);
     [[nodiscard]] std::uint32_t tx_stall_mask() const;
+    [[nodiscard]] pio_interrupt_source_t qualify_interrupt_source() const;
     void on_tx_complete();
     static void tx_dma_irq_handler();
     void force_idle();
-    void emit_nlp();
+    [[nodiscard]] bool emit_nlp();
     static std::int64_t nlp_alarm_cb(alarm_id_t id, void* user);
+    void advance_link(std::uint32_t now_us);
+    void resolve_attempt();
+    void release_frame();
+    void note_medium_free();
 
     Pins pins_;
     PIO pio_{pio0};
     std::uint32_t sm_tx_{0};
     std::uint32_t sm_rx_{0};
+    std::uint32_t sm_qualify_{0};
     std::uint32_t offset_tx_{0};
     std::uint32_t offset_rx_{0};
+    std::uint32_t offset_qualify_{0};
     pio_sm_config tx_cfg_{};
     pio_sm_config rx_cfg_{};
     int dma_tx_{-1};
@@ -126,23 +167,55 @@ class Phy {
     NlpScheduler nlp_{};
     alarm_id_t nlp_alarm_{-1};
 
-    // TX queue: host frames are enqueued (copied) here and clocked out one at a
-    // time. Single-producer/single-consumer, like RxSlotRing: transmit() (main-loop
-    // thread) is the producer and owns tx_head_; on_tx_complete() (TX-DMA interrupt)
-    // is the consumer and owns tx_tail_. One slot stays free to tell full from empty,
-    // so N slots queue N-1 frames.
+    // TX queue: host frames are built in place here and clocked out one at a time.
+    // Both indices belong to the main loop -- commit_tx() fills at tx_head_ and
+    // service() consumes at tx_tail_ -- because a frame is not finished with when its
+    // DMA completes: a collision leaves it queued for a retry, and only the loop
+    // knows whether it is retried, abandoned or discarded. The transmit interrupts
+    // therefore never move the queue on; they publish the attempt's outcome and the
+    // loop acts on it. One slot stays free to tell full from empty, so N slots queue
+    // N-1 frames.
     static constexpr std::size_t TX_QUEUE_SIZE{5};
     static constexpr std::size_t tx_advance(std::size_t i) { return (i + 1 == TX_QUEUE_SIZE) ? 0 : i + 1; }
     std::array<WireFrame, TX_QUEUE_SIZE> tx_queue_{};
-    std::atomic<std::size_t> tx_head_{0};
-    std::atomic<std::size_t> tx_tail_{0};
-    std::atomic<std::uint32_t> tx_last_end_us_{0}; // for interframe-gap spacing
+    std::size_t tx_head_{0};
+    std::size_t tx_tail_{0};
+    bool attempt_in_flight_{false};
 
     std::atomic<bool> active_{false}; // set in start_tx (thread), cleared in on_tx_complete (IRQ)
 
     // Written only in on_tx_complete() (TX-DMA interrupt).
     std::atomic<std::uint32_t> tx_sent_{0};
     std::atomic<std::uint32_t> tx_underrun_{0};
+
+    // When the medium last fell idle -- a carrier deasserting, or our own
+    // transmission (frame or jam) draining -- which is where the interframe gap and
+    // the backoff grid are measured from. Written in the carrier and TX-DMA
+    // interrupts, read by the loop.
+    std::atomic<std::uint32_t> medium_free_us_{0};
+
+    // A carrier qualified while we transmit. The qualification interrupt aborts the
+    // frame, starts the jam and publishes how far into the frame the carrier
+    // appeared; the loop decides what becomes of the frame. Written in the
+    // qualification interrupt.
+    std::atomic<bool> collided_{false};
+    std::atomic<std::uint32_t> collision_elapsed_us_{0};
+    std::atomic<std::uint32_t> tx_start_us_{0};
+
+    // Every carrier assert counts as link activity, whether it carried a frame or
+    // only a link pulse. Counted in the carrier interrupt, consumed by the loop.
+    std::atomic<std::uint32_t> carrier_events_{0};
+    std::uint32_t carrier_events_seen_{0};
+
+    CsmaCd csma_;
+    LinkState link_{};
+    CsmaStats csma_stats_{};
+
+    // The 32-bit jam that tells the peer the frame it is hearing is a collision. It
+    // is DMA'd like a frame, so it lives in RAM rather than in flash.
+    static constexpr std::size_t JAM_OCTETS{JAM_BITS / 8};
+    static constexpr std::uint8_t JAM_OCTET{0xAA};
+    std::array<std::uint8_t, JAM_OCTETS> jam_{};
 
     // The RX SM autopushes four recovered octets per 32-bit FIFO word; DMA lands
     // them densely into the current pool buffer. A worst case capture is a

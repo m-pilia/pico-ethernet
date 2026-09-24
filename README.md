@@ -11,7 +11,7 @@ device](https://en.wikipedia.org/wiki/Ethernet_over_USB).
 * Own design and implementation of the PHY, no external hardware or software
   solution.
 * Efficient implementation with minimal resources. Core 1 is completely unused,
-  and so are most of the memory and PIO SMs. There is room to comfortably run a
+  and so are PIO1/2 and most of the memory. There is room to comfortably run a
   non-trivial second application in parallel on the Pico.
 * Production-quality firmware implementation following industrial best practices.
 
@@ -51,20 +51,17 @@ bazelisk build --config=rp2350 //tools/checks:no_alloc_gate
 bazelisk build --config=rp2350 //tools/checks:binary_size_gate
 ```
 
-## On-target TX PIO self-test
+## On-target tests
 
-Two binaries to test TX and RX PIO SM logic on target are provided. To execute
-them, build and flash, then check the results over a UART console (e.g. via
-`minicom -D /dev/ttyACM0 -b 115200`):
+Binaries to test logic that is runnable on target platform only, e.g. TX and RX
+PIO SMs, are provided. To execute them, build and flash, then check the results
+over a UART console (e.g. via `minicom -D /dev/ttyACM0 -b 115200`):
 
 ```bash
 bazelisk build --config=rp2350 //src/phy/test:rx_pio_selftest
 bazelisk build --config=rp2350 //src/phy/test:tx_pio_selftest
+bazelisk build --config=rp2350 //src/phy/test:csma_cd_selftest
 ```
-
-Since the tests use a slower clock, it is recommended to disconnect power to
-the TX circuit (e.g. by unplugging the VBUS pin connection) to avoid holding
-the transformer under prolonged differential drive.
 
 ## Reading device statistics
 

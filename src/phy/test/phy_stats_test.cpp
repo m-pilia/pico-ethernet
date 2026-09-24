@@ -54,19 +54,43 @@ TEST(EthernetStatisticTest, SelectorsMapToTheRightCounters) {
     rx.bad_fcs = 4;
     rx.runt = 1;
     rx.decode_error = 2;
+    const CsmaStats csma{
+        .deferred = 9,
+        .single_collision = 5,
+        .multiple_collisions = 3,
+        .excessive_collisions = 2,
+        .late_collisions = 1,
+        .link_down_dropped = 4,
+        .link_transitions = 8};
 
-    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitOk, tx, rx), 7u);
-    EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvOk, tx, rx), 11u);
-    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitError, tx, rx), 6u);
-    EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvError, tx, rx), rx.error_total());
-    EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvCrcError, tx, rx), 4u);
-    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitUnderrun, tx, rx), 1u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitOk, tx, rx, csma), 7u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvOk, tx, rx, csma), 11u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitError, tx, rx, csma), 6u + 2u + 1u + 4u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvError, tx, rx, csma), rx.error_total());
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::RcvCrcError, tx, rx, csma), 4u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitOneCollision, tx, rx, csma), 5u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitMoreCollisions, tx, rx, csma), 3u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitDeferred, tx, rx, csma), 9u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitMaxCollisions, tx, rx, csma), 2u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitUnderrun, tx, rx, csma), 1u);
+    EXPECT_EQ(ethernet_statistic(EthernetStatistic::XmitLateCollisions, tx, rx, csma), 1u);
+}
+
+TEST(EthernetStatisticTest, DiagnosticSelectorsMapToTheRightCounters) {
+    RxStats rx{};
+    rx.carrier_glitch = 6;
+    const CsmaStats csma{.link_down_dropped = 4, .link_transitions = 8};
+
+    EXPECT_EQ(ethernet_statistic(static_cast<std::uint16_t>(Diagnostic::CarrierGlitch), TxStats{}, rx, csma), 6u);
+    EXPECT_EQ(ethernet_statistic(static_cast<std::uint16_t>(Diagnostic::LinkDownDropped), TxStats{}, rx, csma), 4u);
+    EXPECT_EQ(ethernet_statistic(static_cast<std::uint16_t>(Diagnostic::LinkTransitions), TxStats{}, rx, csma), 8u);
 }
 
 TEST(EthernetStatisticTest, UnknownSelectorHasNoValue) {
     const TxStats tx{};
     const RxStats rx{};
-    EXPECT_FALSE(ethernet_statistic(static_cast<std::uint16_t>(0x99), tx, rx).has_value());
+    const CsmaStats csma{};
+    EXPECT_FALSE(ethernet_statistic(static_cast<std::uint16_t>(0x99), tx, rx, csma).has_value());
 }
 
 // The advertised bitmap must agree with what the handler actually answers: a bit
@@ -74,10 +98,11 @@ TEST(EthernetStatisticTest, UnknownSelectorHasNoValue) {
 TEST(EthernetStatisticTest, AdvertisedBitmapMatchesHandledSelectors) {
     const TxStats tx{};
     const RxStats rx{};
+    const CsmaStats csma{};
     for (std::uint32_t selector{0}; selector <= 32; ++selector) {
         const std::uint32_t bit{selector == 0 ? 0u : 1u << (selector - 1)};
         const bool advertised{(ETHERNET_STATISTICS_BITMAP & bit) != 0};
-        const bool handled{ethernet_statistic(static_cast<std::uint16_t>(selector), tx, rx).has_value()};
+        const bool handled{ethernet_statistic(static_cast<std::uint16_t>(selector), tx, rx, csma).has_value()};
         EXPECT_EQ(advertised, handled) << "selector 0x" << std::hex << selector;
     }
 }

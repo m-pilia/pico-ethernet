@@ -28,9 +28,6 @@ build_frame(std::span<const std::uint8_t> host_frame, WireFrame& out) {
 
     const std::size_t frame_len{std::max(host_frame.size(), MIN_FRAME_NO_FCS)};
 
-    // Clear in place; assigning a fresh WireFrame{} would put a temporary on the
-    // stack, defeating the point of the out-parameter.
-    out.bytes.fill(0);
     std::size_t pos{0};
 
     for (std::size_t i{0}; i < PREAMBLE_LEN; ++i) {
@@ -42,8 +39,12 @@ build_frame(std::span<const std::uint8_t> host_frame, WireFrame& out) {
 
     const std::size_t frame_start{pos};
     std::ranges::copy(host_frame, out.bytes.begin() + frame_start);
-    // Bytes from host_frame.size() to frame_len stay zero (padding).
     pos = frame_start + frame_len;
+
+    // Everything below out.length is written here and nothing above it is ever read
+    // (WireFrame::view bounds at length), so the padding is the only part that needs
+    // clearing.
+    std::fill(out.bytes.begin() + frame_start + host_frame.size(), out.bytes.begin() + pos, 0);
 
     const std::uint32_t fcs{crc32(std::span<const std::uint8_t>(out.bytes).subspan(frame_start, frame_len))};
     out.bytes[pos] = static_cast<std::uint8_t>(fcs);

@@ -77,14 +77,16 @@ void UsbNetDevice::initialize() {
     irq_add_shared_handler(USBCTRL_IRQ, &pico_ethernet_usb_irq_handler, PICO_SHARED_IRQ_HANDLER_LOWEST_ORDER_PRIORITY);
     irq_set_priority(USBCTRL_IRQ, USB_IRQ_PRIORITY);
 
-    // Present the cable as connected so the host activates the data interface and
-    // sends frames. The wire-driven link state replaces this forced-up value with
-    // the link FSM bring-up.
-    set_link_up(true);
+    // The link follows the wire from here on, and no peer has been heard yet.
+    publish_link_state(false);
 }
 
 void UsbNetDevice::task() {
     phy_.service();
+
+    // The PHY's link FSM and this mirror both live on the main loop, so the state
+    // is read directly rather than latched; only a change reaches the host.
+    publish_link_state(phy_.link_up());
 
     // Move host frames the USB ISR queued into the PHY transmit path.
     drain_usb_tx();
@@ -133,39 +135,30 @@ void UsbNetDevice::task() {
 }
 
 void UsbNetDevice::drain_usb_tx() {
-    // Retry a frame held over from a full PHY TX queue.
-    if (tx_backpressured_) {
-        if (!phy_.transmit(pending_tx_.view())) {
-            return; // PHY TX still congested; dequeueing more would just fail too
-        }
-        tx_backpressured_ = false;
-    }
-
-    // Frame and transmit what the ISR queued, building each wire frame directly
-    // into pending_tx_ to keep the ~1.5 KB WireFrame off this function's stack.
-    //
-    // Reusing pending_tx_ as the build scratch is safe without a lock: it and
-    // tx_backpressured_ are touched only by drain_usb_tx(), which runs solely
-    // from the main-loop task() (single writer, single reader). The USB ISR only
-    // produces into the usb_tx_slots_ ring via the head/tail atomics (SPSC) and
-    // never accesses pending_tx_. The slot is released (tail advanced) once
-    // build_frame has copied its bytes out, so the ISR may reuse it immediately.
+    // The USB slot is released (tail advanced) as soon as build_frame has copied its
+    // bytes out, so the ISR may refill it while the frame is still on the wire.
     for (;;) {
         const std::size_t tail{usb_tx_tail_.load(std::memory_order_relaxed)};
         if (tail == usb_tx_head_.load(std::memory_order_acquire)) {
             return; // queue empty
         }
+        WireFrame* const slot{phy_.tx_slot()};
+        if (slot == nullptr) {
+            return; // PHY TX full; the host frame keeps its place until a slot frees
+        }
         const std::span<const std::uint8_t> raw{usb_tx_slots_[tail].data.data(), usb_tx_slots_[tail].len};
-        const auto result{build_frame(raw, pending_tx_)};
+        const auto result{build_frame(raw, *slot)};
         usb_tx_tail_.store(usb_tx_advance(tail), std::memory_order_release);
         if (!result) {
             ++stats_.build_failed;
-            continue;
+            continue; // nothing framed, so the lap's frame is still owed
         }
-        if (!phy_.transmit(pending_tx_.view())) {
-            tx_backpressured_ = true;
-            return; // PHY TX full; pending_tx_ already holds the frame, stop draining
-        }
+        phy_.commit_tx();
+        // Building a wire frame costs more than the slot time the deferral and backoff
+        // decisions run on, so the queue drains one frame per lap. That keeps the lap
+        // short at the expense of short-frame throughput, which is bounded by the lap
+        // rate rather than by the wire.
+        return;
     }
 }
 
@@ -199,8 +192,12 @@ void UsbNetDevice::deliver_to_host(std::span<const std::uint8_t> frame) {
     ++rx_stats_.delivered;
 }
 
-void UsbNetDevice::set_link_up(bool up) {
+void UsbNetDevice::publish_link_state(bool up) {
+    if (link_state_published_ && link_up_ == up) {
+        return;
+    }
     link_up_ = up;
+    link_state_published_ = true;
     UsbInterruptLock lock;
     tud_network_link_state(USB_RHPORT, up);
 }
@@ -259,9 +256,9 @@ void UsbNetDevice::on_network_init() {
 }
 
 bool UsbNetDevice::on_get_statistic(std::uint16_t selector, std::uint32_t& value) const {
-    // Runs in the USB ISR. It reads stats_/rx_stats_ without a lock: every counter
+    // Runs in the USB ISR. It reads the counters without a lock: every one of them
     // has a single writer (see TxStats), so each aligned 32-bit read is coherent.
-    const auto result = ethernet_statistic(selector, stats_, rx_stats_);
+    const auto result = ethernet_statistic(selector, stats_, rx_stats_, phy_.csma_stats());
     if (!result) {
         return false;
     }

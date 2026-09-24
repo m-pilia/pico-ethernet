@@ -48,7 +48,27 @@ cc_library(
     name = "link_pulse",
     hdrs = ["link_pulse.h"],
     visibility = ["//visibility:public"],
+    deps = [
+        ":phy_timing",
+        "//src/util:random",
+    ],
+)
+
+cc_library(
+    name = "link_state",
+    hdrs = ["link_state.h"],
+    visibility = ["//visibility:public"],
     deps = [":phy_timing"],
+)
+
+cc_library(
+    name = "csma_cd",
+    hdrs = ["csma_cd.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":phy_timing",
+        "//src/util:random",
+    ],
 )
 
 pico_generate_pio_header(
@@ -63,13 +83,22 @@ pico_generate_pio_header(
     visibility = ["//src/phy:__subpackages__"],
 )
 
+pico_generate_pio_header(
+    name = "carrier_qualify_pio",
+    srcs = ["carrier_qualify.pio"],
+)
+
 cc_library(
     name = "phy",
     srcs = ["phy.cpp"],
     hdrs = ["phy.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":carrier_qualify_pio",
+        ":csma_cd",
         ":link_pulse",
+        ":link_state",
+        ":phy_stats",
         ":phy_timing",
         ":rx_frame_recover",
         ":rx_pio",

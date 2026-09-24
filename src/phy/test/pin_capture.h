@@ -78,8 +78,7 @@ class PinCapture {
     // Shift-right autopush packs the samples least-significant first, so sample i
     // occupies bits [2i, 2i+1] of its word.
     [[nodiscard]] std::uint8_t level(std::size_t sample) const {
-        return static_cast<std::uint8_t>(words_[sample / SAMPLES_PER_WORD] >> (2 * (sample % SAMPLES_PER_WORD))) &
-               0b11;
+        return static_cast<std::uint8_t>(words_[sample / SAMPLES_PER_WORD] >> (2 * (sample % SAMPLES_PER_WORD))) & 0b11;
     }
 
     [[nodiscard]] std::uint32_t sm_mask() const { return 1u << sm_; }

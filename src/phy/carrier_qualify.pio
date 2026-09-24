@@ -1,0 +1,31 @@
+; SPDX-License-Identifier: MIT
+; Copyright (c) 2026 Martino Pilia
+;
+; Carrier qualification state machine: raises its (SM-relative) interrupt flag once
+; RXC has stayed asserted without a break for the whole qualification window. The
+; comparator's carrier detect also fires on the peer's link pulses, stretched by
+; the RC tail of its filter; a colliding station's carrier (at least its preamble
+; and a jam) far outlasts them, so only a carrier that survives the window may count
+; as a collision.
+;
+; IN base = JMP pin = RXC. The OSR holds the window as a loop count, loaded once by
+; the CPU and copied into X on every assert. Each loop iteration is 2 cycles and
+; samples RXC once, so the flag rises 2 * (OSR + 1) cycles after the assert is seen,
+; and any release inside the window restarts the wait. The loop count is derived from
+; that iteration length in phy.cpp (QUALIFY_CYCLES_PER_ITERATION), so reshaping the
+; loop means updating it there.
+
+.program carrier_qualify
+
+.wrap_target
+idle:
+    wait 0 pin 0             ; one qualification per assert: start from a released carrier
+    mov x, osr
+    wait 1 pin 0             ; carrier asserts
+hold:
+    jmp pin, asserted
+    jmp idle                 ; released inside the window: a pulse, not a carrier
+asserted:
+    jmp x--, hold
+    irq set 0 rel            ; qualified; flag the CPU, then wait out this assert
+.wrap

@@ -7,7 +7,7 @@ device](https://en.wikipedia.org/wiki/Ethernet_over_USB).
 # Goals
 
 * Compliant 10BASE-T Ethernet NIC, highest possible 10BASE-T speed over a USB
-  1.1 link.
+  1.1 link. Support for full-duplex and CSMA/CD.
 * Own design and implementation of the PHY, no external hardware or software
   solution.
 * Efficient implementation with minimal resources. Core 1 is completely unused,

@@ -127,9 +127,7 @@ bool decode_burst(std::span<const std::uint32_t> starts, std::uint16_t& code_wor
         const std::uint32_t spacing_ns{samples_to_ns(starts[i] - starts[i - 1])};
         if (in_interval(spacing_ns)) {
             if (i + 1 == starts.size() || !in_interval(samples_to_ns(starts[i + 1] - starts[i]))) {
-                printf(
-                    "FAIL: data pulse %u is not followed by a clock pulse one interval later\n",
-                    static_cast<unsigned>(clocks));
+                printf("FAIL: data pulse %" PRIu32 " is not followed by a clock pulse one interval later\n", clocks);
                 return false;
             }
             code_word = static_cast<std::uint16_t>(code_word | (1u << (clocks - 1)));
@@ -139,18 +137,15 @@ bool decode_burst(std::span<const std::uint32_t> starts, std::uint16_t& code_wor
             ++i;
         } else {
             printf(
-                "FAIL: pulse %u follows the previous one after %u ns\n",
-                static_cast<unsigned>(i),
-                static_cast<unsigned>(spacing_ns));
+                "FAIL: pulse %" PRIu32 " follows the previous one after %" PRIu32 " ns\n",
+                static_cast<std::uint32_t>(i),
+                spacing_ns);
             return false;
         }
         ++clocks;
     }
     if (clocks != FLP_CLOCK_PULSES) {
-        printf(
-            "FAIL: burst has %u clock pulses, expected %u\n",
-            static_cast<unsigned>(clocks),
-            static_cast<unsigned>(FLP_CLOCK_PULSES));
+        printf("FAIL: burst has %" PRIu32 " clock pulses, expected %" PRIu32 "\n", clocks, FLP_CLOCK_PULSES);
         return false;
     }
     return true;
@@ -164,7 +159,7 @@ bool check_flp_bursts(Phy& phy, Capture& capture) {
         return false;
     }
     const std::uint32_t period_us{*second_us - *first_us};
-    printf("  burst period %u us\n", static_cast<unsigned>(period_us));
+    printf("  burst period %" PRIu32 " us\n", period_us);
     if (period_us < FLP_BURST_PERIOD_MIN_US || period_us > FLP_BURST_PERIOD_MAX_US) {
         printf(
             "FAIL: burst period outside %" PRIu32 "-%" PRIu32 " us\n",
@@ -206,10 +201,10 @@ bool check_flp_bursts(Phy& phy, Capture& capture) {
         return false;
     }
     printf(
-        "  %u pulses captured, the first %u us in (%u us lead intended)\n",
-        static_cast<unsigned>(count),
-        static_cast<unsigned>(starts[0] / SYS_CYCLES_PER_US),
-        static_cast<unsigned>(CAPTURE_LEAD_US));
+        "  %" PRIu32 " pulses captured, the first %" PRIu32 " us in (%" PRIu32 " us lead intended)\n",
+        static_cast<std::uint32_t>(count),
+        starts[0] / SYS_CYCLES_PER_US,
+        CAPTURE_LEAD_US);
 
     std::uint16_t code_word{0};
     if (!decode_burst(std::span{starts}.first(count), code_word)) {
@@ -275,11 +270,12 @@ bool check_full_duplex_transmit(Phy& phy, PeerLink& peer) {
     const std::uint32_t deferred{after.deferred - before.deferred};
     if (!started || sent != 1 || collisions != 0 || deferred != 0) {
         printf(
-            "FAIL: full duplex over the peer's carrier: started %u, sent %u, collisions %u, deferred %u\n",
-            static_cast<unsigned>(started),
-            static_cast<unsigned>(sent),
-            static_cast<unsigned>(collisions),
-            static_cast<unsigned>(deferred));
+            "FAIL: full duplex over the peer's carrier: started %" PRIu32 ", sent %" PRIu32 ", collisions %" PRIu32
+            ", deferred %" PRIu32 "\n",
+            static_cast<std::uint32_t>(started),
+            sent,
+            collisions,
+            deferred);
         return false;
     }
     return true;
@@ -346,10 +342,9 @@ bool check_parallel_detection(Phy& phy, PeerLink& peer) {
         return false;
     }
     const std::uint32_t took_us{time_us_32() - down_us};
-    printf("  parallel detection took %u us from link loss\n", static_cast<unsigned>(took_us));
+    printf("  parallel detection took %" PRIu32 " us from link loss\n", took_us);
     if (took_us < earliest_us) {
-        printf(
-            "FAIL: link up before break_link and autoneg_wait ran out (%u us)\n", static_cast<unsigned>(earliest_us));
+        printf("FAIL: link up before break_link and autoneg_wait ran out (%" PRIu32 " us)\n", earliest_us);
         return false;
     }
     return true;

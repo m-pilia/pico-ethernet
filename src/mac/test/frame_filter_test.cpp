@@ -44,7 +44,7 @@ TEST(FrameFilterTest, DefaultAcceptsNothing) {
 }
 
 TEST(FrameFilterTest, PromiscuousAcceptsEverything) {
-    const auto filter = with_filter(FrameFilter::PROMISCUOUS);
+    const auto filter{with_filter(FrameFilter::PROMISCUOUS)};
     EXPECT_TRUE(filter.accept(OUR_MAC));
     EXPECT_TRUE(filter.accept(OTHER_UNICAST));
     EXPECT_TRUE(filter.accept(BROADCAST));
@@ -52,7 +52,7 @@ TEST(FrameFilterTest, PromiscuousAcceptsEverything) {
 }
 
 TEST(FrameFilterTest, DirectedAcceptsOnlyOurUnicast) {
-    const auto filter = with_filter(FrameFilter::DIRECTED);
+    const auto filter{with_filter(FrameFilter::DIRECTED)};
     EXPECT_TRUE(filter.accept(OUR_MAC));
     EXPECT_FALSE(filter.accept(OTHER_UNICAST));
     EXPECT_FALSE(filter.accept(BROADCAST));
@@ -60,14 +60,14 @@ TEST(FrameFilterTest, DirectedAcceptsOnlyOurUnicast) {
 }
 
 TEST(FrameFilterTest, BroadcastBitGatesBroadcastOnly) {
-    const auto filter = with_filter(FrameFilter::BROADCAST);
+    const auto filter{with_filter(FrameFilter::BROADCAST)};
     EXPECT_TRUE(filter.accept(BROADCAST));
     EXPECT_FALSE(filter.accept(OUR_MAC));
     EXPECT_FALSE(filter.accept(MCAST_A));
 }
 
 TEST(FrameFilterTest, AllMulticastAcceptsAnyGroupButNotUnicast) {
-    const auto filter = with_filter(FrameFilter::ALL_MULTICAST);
+    const auto filter{with_filter(FrameFilter::ALL_MULTICAST)};
     EXPECT_TRUE(filter.accept(MCAST_A));
     EXPECT_TRUE(filter.accept(MCAST_B));
     EXPECT_FALSE(filter.accept(OUR_MAC));
@@ -87,12 +87,12 @@ TEST(FrameFilterTest, MulticastListAcceptsOnlySubscribedGroups) {
 }
 
 TEST(FrameFilterTest, MulticastBitWithoutListAcceptsNoGroup) {
-    const auto filter = with_filter(FrameFilter::MULTICAST);
+    const auto filter{with_filter(FrameFilter::MULTICAST)};
     EXPECT_FALSE(filter.accept(MCAST_A));
 }
 
 TEST(FrameFilterTest, CombinedBitsAccumulate) {
-    const auto filter = with_filter(FrameFilter::DIRECTED | FrameFilter::BROADCAST);
+    const auto filter{with_filter(FrameFilter::DIRECTED | FrameFilter::BROADCAST)};
     EXPECT_TRUE(filter.accept(OUR_MAC));
     EXPECT_TRUE(filter.accept(BROADCAST));
     EXPECT_FALSE(filter.accept(OTHER_UNICAST));

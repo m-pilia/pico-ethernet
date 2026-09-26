@@ -18,7 +18,7 @@ inline constexpr std::uint8_t PREAMBLE_BYTE{0x55};
 inline constexpr std::uint8_t SFD_BYTE{0xD5};
 inline constexpr std::size_t PREAMBLE_LEN{7};
 inline constexpr std::size_t SFD_LEN{1};
-inline constexpr std::size_t PREAMBLE_SFD_LEN{PREAMBLE_LEN + SFD_LEN}; // 8
+inline constexpr std::size_t PREAMBLE_SFD_LEN{PREAMBLE_LEN + SFD_LEN};
 
 // Sizes exclude preamble/SFD, which are framing bytes owned by the MAC and not
 // counted as part of the frame. "Frame" here is destination..payload[..FCS].
@@ -49,7 +49,7 @@ struct WireFrame {
     std::array<std::uint8_t, WIRE_CAPACITY> bytes{};
     std::size_t length{0};
 
-    constexpr std::span<const std::uint8_t> view() const { return std::span<const std::uint8_t>(bytes.data(), length); }
+    constexpr std::span<const std::uint8_t> view() const { return std::span<const std::uint8_t>{bytes}.first(length); }
 };
 
 // The accessors below take a frame starting at the destination address (no

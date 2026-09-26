@@ -35,8 +35,8 @@ std::span<const std::uint8_t> mac_frame_with_fcs(const WireFrame& frame) {
 } // namespace
 
 TEST(FrameBuilderTest, PrependsPreambleAndSfd) {
-    const auto host = make_host_frame(100);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(100)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
 
     for (std::size_t i{0}; i < PREAMBLE_LEN; ++i) {
@@ -46,26 +46,26 @@ TEST(FrameBuilderTest, PrependsPreambleAndSfd) {
 }
 
 TEST(FrameBuilderTest, CopiesFrameAndAppendsFcsForFullSizeFrame) {
-    const auto host = make_host_frame(100);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(100)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
 
     EXPECT_EQ(built->length, PREAMBLE_SFD_LEN + 100 + FCS_LEN);
 
-    const auto mac = mac_frame_with_fcs(*built);
+    const auto mac{mac_frame_with_fcs(*built)};
     EXPECT_TRUE(std::ranges::equal(mac.first(host.size()), host));
     // A correct frame + its appended FCS yields the fixed CRC residual.
     EXPECT_EQ(crc32(mac), 0x2144DF1Cu);
 }
 
 TEST(FrameBuilderTest, PadsShortFrameToMinimumWithZeros) {
-    const auto host = make_host_frame(20);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(20)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
 
     EXPECT_EQ(built->length, PREAMBLE_SFD_LEN + MIN_FRAME_NO_FCS + FCS_LEN);
 
-    const auto mac = mac_frame_with_fcs(*built);
+    const auto mac{mac_frame_with_fcs(*built)};
     for (std::size_t i{host.size()}; i < MIN_FRAME_NO_FCS; ++i) {
         EXPECT_EQ(mac[i], 0) << "pad byte " << i;
     }
@@ -73,15 +73,15 @@ TEST(FrameBuilderTest, PadsShortFrameToMinimumWithZeros) {
 }
 
 TEST(FrameBuilderTest, AcceptsMaximumSizeFrame) {
-    const auto host = make_host_frame(MAX_FRAME_NO_FCS);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(MAX_FRAME_NO_FCS)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
     EXPECT_EQ(built->length, WIRE_CAPACITY);
 }
 
 TEST(FrameBuilderTest, RejectsOversizeFrame) {
-    const auto host = make_host_frame(MAX_FRAME_NO_FCS + 1);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(MAX_FRAME_NO_FCS + 1)};
+    const auto built{build_frame(host)};
     ASSERT_FALSE(built.has_value());
     EXPECT_EQ(built.error(), FrameError::TooLong);
 }

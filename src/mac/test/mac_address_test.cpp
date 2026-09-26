@@ -40,9 +40,9 @@ class MacAddressTest : public ::testing::Test {
 };
 
 TEST_F(MacAddressTest, default_generation) {
-    const auto mac = MacAddress::generate_default();
+    const auto mac{MacAddress::generate_default()};
 
-    EXPECT_EQ(mac.bytes(), MacAddress::DEFAULT_PHASE1);
+    EXPECT_EQ(mac.bytes(), MacAddress::DEFAULT_BYTES);
 }
 
 TEST_F(MacAddressTest, default_constructed_is_all_zero) {
@@ -54,14 +54,14 @@ TEST_F(MacAddressTest, default_constructed_is_all_zero) {
 }
 
 TEST_F(MacAddressTest, default_properties) {
-    const auto mac = MacAddress::generate_default();
+    const auto mac{MacAddress::generate_default()};
 
     // 02:... is a unicast (individual) address: the group bit is clear.
     EXPECT_FALSE(mac.is_multicast());
 }
 
 TEST_F(MacAddressTest, byte_access) {
-    const auto mac = MacAddress::generate_default();
+    const auto mac{MacAddress::generate_default()};
 
     EXPECT_EQ(mac.byte(0), 0x02);
     EXPECT_EQ(mac.byte(1), 0x00);
@@ -73,7 +73,7 @@ TEST_F(MacAddressTest, byte_access) {
 
 #ifndef NDEBUG
 TEST_F(MacAddressTest, byte_out_of_range_asserts) {
-    const auto mac = MacAddress::generate_default();
+    const auto mac{MacAddress::generate_default()};
 
     EXPECT_DEATH((void)mac.byte(MacAddress::LENGTH), "");
 }
@@ -81,14 +81,14 @@ TEST_F(MacAddressTest, byte_out_of_range_asserts) {
 
 TEST_F(MacAddressTest, construction_from_span) {
     // Extract a MAC from the first six octets of a larger buffer.
-    const std::array<std::uint8_t, 8> frame = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0xAA, 0xBB};
-    const auto mac = MacAddress(std::span<const std::uint8_t, MacAddress::LENGTH>(frame.data(), MacAddress::LENGTH));
+    const std::array<std::uint8_t, 8> frame{0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0xAA, 0xBB};
+    const MacAddress mac{std::span<const std::uint8_t>{frame}.first<MacAddress::LENGTH>()};
 
     EXPECT_EQ(mac, MacAddress::generate_default());
 }
 
 TEST_F(MacAddressTest, to_string) {
-    const auto mac = MacAddress::generate_default();
+    const auto mac{MacAddress::generate_default()};
 
     EXPECT_EQ(std::string_view(mac.to_string().data()), "02:00:00:00:00:01");
     EXPECT_EQ(std::string_view(mac.to_string('-').data()), "02-00-00-00-00-01");
@@ -97,28 +97,28 @@ TEST_F(MacAddressTest, to_string) {
 
 TEST_F(MacAddressTest, to_string_uppercase_hex) {
     // Exercises the A-F output path (every nibble printed in uppercase).
-    const auto mac = make_mac({0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45});
+    const auto mac{make_mac({0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45})};
 
     EXPECT_EQ(std::string_view(mac.to_string().data()), "AB:CD:EF:01:23:45");
 }
 
 TEST_F(MacAddressTest, to_imac_string) {
-    const auto mac = MacAddress::generate_default();
-    const auto imac = mac.to_imac_string();
+    const auto mac{MacAddress::generate_default()};
+    const auto imac{mac.to_imac_string()};
 
     EXPECT_EQ(std::string(imac.begin(), imac.end()), "020000000001");
 }
 
 TEST_F(MacAddressTest, to_imac_string_uppercase_hex) {
-    const auto mac = make_mac({0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45});
-    const auto imac = mac.to_imac_string();
+    const auto mac{make_mac({0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45})};
+    const auto imac{mac.to_imac_string()};
 
     // 12 chars, uppercase, no separators.
     EXPECT_EQ(std::string(imac.begin(), imac.end()), "ABCDEF012345");
 }
 
 TEST_F(MacAddressTest, parse_string) {
-    auto mac = MacAddress::parse("02:00:00:00:00:01");
+    auto mac{MacAddress::parse("02:00:00:00:00:01")};
     ASSERT_TRUE(mac.has_value());
     EXPECT_EQ(*mac, MacAddress::generate_default());
 
@@ -138,11 +138,11 @@ TEST_F(MacAddressTest, parse_string) {
 TEST_F(MacAddressTest, parse_case_insensitive) {
     // Uses a-f / A-F digits so case actually matters. Lower, upper, and mixed
     // case (separated and not) must all yield the same address.
-    const auto expected = make_mac({0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45});
+    const auto expected{make_mac({0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45})};
 
     for (const std::string_view str :
          {"ab:cd:ef:01:23:45", "AB:CD:EF:01:23:45", "aB:Cd:eF:01:23:45", "abcdef012345", "ABCDEF012345"}) {
-        const auto mac = MacAddress::parse(str);
+        const auto mac{MacAddress::parse(str)};
         ASSERT_TRUE(mac.has_value()) << str;
         EXPECT_EQ(*mac, expected) << str;
     }
@@ -168,9 +168,9 @@ TEST_F(MacAddressTest, parse_rejects_unknown_separator) {
 }
 
 TEST_F(MacAddressTest, equality_operators) {
-    const auto mac1 = make_mac({0x02, 0x00, 0x00, 0x00, 0x00, 0x01});
-    const auto mac2 = make_mac({0x02, 0x00, 0x00, 0x00, 0x00, 0x02});
-    const auto mac3 = make_mac({0x02, 0x00, 0x00, 0x00, 0x00, 0x01});
+    const auto mac1{make_mac({0x02, 0x00, 0x00, 0x00, 0x00, 0x01})};
+    const auto mac2{make_mac({0x02, 0x00, 0x00, 0x00, 0x00, 0x02})};
+    const auto mac3{make_mac({0x02, 0x00, 0x00, 0x00, 0x00, 0x01})};
 
     EXPECT_EQ(mac1, mac1);
     EXPECT_EQ(mac1, mac3);
@@ -178,21 +178,21 @@ TEST_F(MacAddressTest, equality_operators) {
 }
 
 TEST_F(MacAddressTest, broadcast_is_group_address) {
-    const auto broadcast = make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF});
+    const auto broadcast{make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF})};
 
     EXPECT_TRUE(broadcast.is_multicast());
     EXPECT_TRUE(broadcast.is_broadcast());
 }
 
 TEST_F(MacAddressTest, multicast_address) {
-    const auto multicast = make_mac({0x01, 0x00, 0x5E, 0x00, 0x00, 0x01});
+    const auto multicast{make_mac({0x01, 0x00, 0x5E, 0x00, 0x00, 0x01})};
 
     EXPECT_TRUE(multicast.is_multicast());
     EXPECT_FALSE(multicast.is_broadcast());
 }
 
 TEST_F(MacAddressTest, unicast_is_neither_group_nor_broadcast) {
-    const auto unicast = MacAddress::generate_default();
+    const auto unicast{MacAddress::generate_default()};
 
     EXPECT_FALSE(unicast.is_multicast());
     EXPECT_FALSE(unicast.is_broadcast());
@@ -205,12 +205,12 @@ TEST_F(MacAddressTest, almost_broadcast_is_not_broadcast) {
 }
 
 TEST_F(MacAddressTest, iteration) {
-    const auto mac = MacAddress::generate_default();
+    const auto mac{MacAddress::generate_default()};
 
     EXPECT_EQ(mac.size(), 6);
 
-    const std::uint8_t* begin{mac.begin()};
-    const std::uint8_t* end{mac.end()};
+    const MacAddress::Bytes::const_iterator begin{mac.begin()};
+    const MacAddress::Bytes::const_iterator end{mac.end()};
 
     EXPECT_EQ(begin[0], 0x02);
     EXPECT_EQ(begin[1], 0x00);

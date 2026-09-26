@@ -134,7 +134,7 @@ std::uint32_t predicted_backoff_us(std::uint32_t collided_frames_before) {
 
 bool check_link_comes_up(Phy& phy, PeerLink& peer) {
     if (!peer.send_nlps_until(phy, [&phy] { return phy.link_up(); }, LINK_UP_TIMEOUT_US)) {
-        printf("FAIL: link still down after %u us of NLPs\n", static_cast<unsigned>(LINK_UP_TIMEOUT_US));
+        printf("FAIL: link still down after %" PRIu32 " us of NLPs\n", LINK_UP_TIMEOUT_US);
         return false;
     }
     return true;
@@ -198,7 +198,7 @@ bool check_defers_to_carrier(Phy& phy, PeerLink& peer) {
 bool check_jam_shape(std::size_t& driven_samples) {
     const std::size_t run_count{level_runs(g_samples, g_runs)};
     if (run_count < JAM_PAIRED_RUNS + 2) {
-        printf("FAIL: only %u level runs captured\n", static_cast<unsigned>(run_count));
+        printf("FAIL: only %" PRIu32 " level runs captured\n", static_cast<std::uint32_t>(run_count));
         return false;
     }
     if (run_count == g_runs.size()) {
@@ -234,10 +234,10 @@ bool check_jam_shape(std::size_t& driven_samples) {
     }
     if (paired != JAM_PAIRED_RUNS) {
         printf(
-            "FAIL: jam is %u paired runs, expected %u (%u bits of jam)\n",
-            static_cast<unsigned>(paired),
-            static_cast<unsigned>(JAM_PAIRED_RUNS),
-            static_cast<unsigned>(paired + 1));
+            "FAIL: jam is %" PRIu32 " paired runs, expected %" PRIu32 " (%" PRIu32 " bits of jam)\n",
+            static_cast<std::uint32_t>(paired),
+            static_cast<std::uint32_t>(JAM_PAIRED_RUNS),
+            static_cast<std::uint32_t>(paired + 1));
         return false;
     }
     if (index == 0 || half_bits_in(g_runs[index - 1]) != 1) {
@@ -308,11 +308,12 @@ bool check_collision_aborts_and_jams(Phy& phy, PeerLink& peer, Capture& capture)
     }
     const std::size_t response_samples{driven_samples - before_collision};
     printf(
-        "  aborted after %u cycles of frame; collision response %u cycles (%u ns), jam %u bits\n",
-        static_cast<unsigned>(before_collision),
-        static_cast<unsigned>(response_samples),
-        static_cast<unsigned>(response_samples * 1000 / SYS_CYCLES_PER_US),
-        static_cast<unsigned>(JAM_BITS));
+        "  aborted after %" PRIu32 " cycles of frame; collision response %" PRIu32 " cycles (%" PRIu32
+        " ns), jam %" PRIu32 " bits\n",
+        static_cast<std::uint32_t>(before_collision),
+        static_cast<std::uint32_t>(response_samples),
+        static_cast<std::uint32_t>(response_samples * 1000 / SYS_CYCLES_PER_US),
+        JAM_BITS);
 
     if (response_samples > MAX_COLLISION_RESPONSE_US * SYS_CYCLES_PER_US) {
         printf("FAIL: kept transmitting for more than %" PRIu32 " us after the collision\n", MAX_COLLISION_RESPONSE_US);
@@ -419,12 +420,13 @@ bool check_short_carrier_is_not_a_collision(Phy& phy, PeerLink& peer, std::uint3
     const std::uint32_t late{phy.csma_stats().late_collisions - late_before};
     if (sent != 1 || underrun != 0 || late != 0) {
         printf(
-            "FAIL: a %u us carrier %u us into the frame disturbed it: sent %u, underrun %u, late collisions %u\n",
-            static_cast<unsigned>(SHORT_CARRIER_US),
-            static_cast<unsigned>(at_us),
-            static_cast<unsigned>(sent),
-            static_cast<unsigned>(underrun),
-            static_cast<unsigned>(late));
+            "FAIL: a %" PRIu32 " us carrier %" PRIu32 " us into the frame disturbed it: sent %" PRIu32
+            ", underrun %" PRIu32 ", late collisions %" PRIu32 "\n",
+            SHORT_CARRIER_US,
+            at_us,
+            sent,
+            underrun,
+            late);
         return false;
     }
     return true;
@@ -432,7 +434,7 @@ bool check_short_carrier_is_not_a_collision(Phy& phy, PeerLink& peer, std::uint3
 
 } // namespace
 
-int run_selftest() {
+bool run_selftest() {
     set_sys_clock_khz(SYS_CLOCK_HZ / 1000, true);
     stdio_init_all();
     sleep_ms(2500); // let the debugprobe UART console attach
@@ -486,9 +488,9 @@ int run_selftest() {
         sleep_ms(10'000);
     }
 
-    return ok ? 0 : 1;
+    return ok;
 }
 
 } // namespace pico_ethernet
 
-int main() { return pico_ethernet::run_selftest(); }
+int main() { return pico_ethernet::run_selftest() ? 0 : 1; }

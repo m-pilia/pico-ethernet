@@ -48,10 +48,6 @@ class UsbNetDevice {
     // from the interrupt, not here.
     void task();
 
-    const MacAddress& mac_address() const { return mac_address_; }
-    const TxStats& tx_stats() const { return stats_; }
-    const RxStats& rx_stats() const { return rx_stats_; }
-
     // Handlers invoked by the extern "C" TinyUSB network callbacks. recv runs in
     // ISR context (USB is interrupt-driven); the others fire from tud_task_ext()
     // in the same USB ISR.

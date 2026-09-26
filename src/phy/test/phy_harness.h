@@ -5,6 +5,7 @@
 #define PHY_TEST_PHY_HARNESS_H
 
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -26,7 +27,7 @@ namespace pico_ethernet {
 inline constexpr std::uint32_t TIMING_SLACK_US{20'000};
 
 // Spins the PHY loop until `ready` holds or `timeout_us` has passed.
-template <typename Ready>
+template <std::predicate Ready>
 void service_until(Phy& phy, Ready ready, std::uint32_t timeout_us) {
     const std::uint32_t start{time_us_32()};
     while (!ready() && time_us_32() - start <= timeout_us) {
@@ -97,7 +98,7 @@ class PeerLink {
     void refresh_link(Phy& phy) { send_nlps(phy, REFRESH_NLPS); }
 
     // Sends NLPs until `done` holds or `timeout_us` has passed, and returns `done`.
-    template <typename Done>
+    template <std::predicate Done>
     [[nodiscard]] bool send_nlps_until(Phy& phy, Done done, std::uint32_t timeout_us) {
         const std::uint32_t start{time_us_32()};
         while (!done() && time_us_32() - start <= timeout_us) {

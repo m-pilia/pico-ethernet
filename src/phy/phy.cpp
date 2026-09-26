@@ -52,7 +52,7 @@ constexpr std::uint32_t CODE_WORD_SEQUENCE_MASK{(1u << (32 - CODE_WORD_SEQUENCE_
 
 // RP2350-E5: a channel aborted while still enabled can re-trigger, so it is disabled
 // first. Whatever starts the channel again has to enable it again.
-void __not_in_flash_func(abort_dma_channel)(uint channel) {
+void __not_in_flash_func(abort_dma_channel)(std::uint32_t channel) {
     hw_clear_bits(&dma_channel_hw_addr(channel)->al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
     dma_channel_abort(channel);
 }
@@ -81,9 +81,9 @@ bool Phy::initialize() {
     offset_rx_ = static_cast<std::uint32_t>(pio_add_program(pio_, &rx_manchester_program));
     offset_qualify_ = static_cast<std::uint32_t>(pio_add_program(pio_, &carrier_qualify_program));
 
-    const int smt{pio_claim_unused_sm(pio_, false)};
-    const int smr{pio_claim_unused_sm(pio_, false)};
-    const int smq{pio_claim_unused_sm(pio_, false)};
+    const std::int32_t smt{pio_claim_unused_sm(pio_, false)};
+    const std::int32_t smr{pio_claim_unused_sm(pio_, false)};
+    const std::int32_t smq{pio_claim_unused_sm(pio_, false)};
     if (smt < 0 || smr < 0 || smq < 0) {
         return false;
     }
@@ -119,7 +119,7 @@ bool Phy::initialize() {
     // The qualifier runs all the time, but its flag only reaches the CPU while we
     // transmit in half duplex: start_tx() enables the source and on_tx_complete()
     // disables it.
-    const auto qualify_irq{static_cast<uint>(pio_get_irq_num(pio_, 0))};
+    const std::uint32_t qualify_irq{static_cast<std::uint32_t>(pio_get_irq_num(pio_, 0))};
     irq_set_exclusive_handler(qualify_irq, &Phy::carrier_qualified_irq_handler);
     irq_set_enabled(qualify_irq, true);
 
@@ -337,16 +337,16 @@ void __not_in_flash_func(Phy::on_link_pulse)() {
 Phy::RxFrame Phy::poll_rx() {
     const std::optional<RxSlotRing<RX_POOL_SIZE>::Completed> done{rx_ring_.peek()};
     if (!done) {
-        return {}; // completed-frame queue empty
+        return {};
     }
 
-    // The words pack four recovered octets each, LSB-first, so on this little-endian
-    // core the capture buffer reads directly as the packed octet stream (octet j =
-    // byte j). recover_frame() re-aligns and FCS-delimits it in one pass -- the
-    // carrier gate started the decoder mid-preamble, so its octet boundaries are
-    // bit-offset from the frame's.
+    // The DMA'd words pack four recovered octets each, LSB-first, so on this
+    // little-endian core the capture buffer holds the octet stream in order.
+    // recover_frame() re-aligns and FCS-delimits it in one pass -- the carrier gate
+    // started the decoder mid-preamble, so its octet boundaries are bit-offset from
+    // the frame's.
     const std::span<const std::uint8_t> raw{
-        reinterpret_cast<const std::uint8_t*>(rx_pool_[done->slot].data()), done->word_count * RX_OCTETS_PER_WORD};
+        std::span{rx_pool_[done->slot]}.first(done->word_count * RX_OCTETS_PER_WORD)};
     const std::expected<std::size_t, FrameError> recovered{recover_frame(raw, rx_frame_)};
     rx_ring_.release();
 
@@ -358,7 +358,7 @@ Phy::RxFrame Phy::poll_rx() {
         }
         return {.kind = RxFrame::Kind::Error, .error = recovered.error()};
     }
-    return {.kind = RxFrame::Kind::Frame, .frame = std::span<const std::uint8_t>(rx_frame_.data(), *recovered)};
+    return {.kind = RxFrame::Kind::Frame, .frame = std::span<const std::uint8_t>{rx_frame_}.first(*recovered)};
 }
 
 WireFrame* Phy::tx_slot() {
@@ -456,7 +456,7 @@ void __not_in_flash_func(Phy::advance_tx)() {
     }
 
     if (tx_tail_ == tx_head_) {
-        return; // queue empty
+        return;
     }
 
     // A link that is down has no medium to contend for, so queued frames go nowhere:

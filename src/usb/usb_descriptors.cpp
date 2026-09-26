@@ -6,10 +6,12 @@
 // template macro, so the (error-prone) interface/endpoint/functional-descriptor
 // layout comes from the maintained stack rather than hand-rolled bytes.
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <span>
+#include <string_view>
 
 #include "tusb.h" // IWYU pragma: keep
 
@@ -17,6 +19,7 @@
 #include "src/mac/mac_address.h"
 #include "src/phy/phy_stats.h"
 
+namespace pico_ethernet {
 namespace {
 
 // pid.codes test VID/PID for open-source/hobby projects.
@@ -24,20 +27,16 @@ constexpr std::uint16_t USB_VID{0x1209};
 constexpr std::uint16_t USB_PID{0x0001};
 constexpr std::uint16_t USB_BCD_DEVICE{0x0100};
 
-enum {
-    STRID_LANGID = 0,
-    STRID_MANUFACTURER,
-    STRID_PRODUCT,
-    STRID_SERIAL,
-    STRID_INTERFACE,
-    STRID_MAC,
-};
+constexpr std::uint8_t STRID_LANGID{0};
+constexpr std::uint8_t STRID_MANUFACTURER{1};
+constexpr std::uint8_t STRID_PRODUCT{2};
+constexpr std::uint8_t STRID_SERIAL{3};
+constexpr std::uint8_t STRID_INTERFACE{4};
+constexpr std::uint8_t STRID_MAC{5};
 
-enum {
-    ITF_NUM_CDC = 0,
-    ITF_NUM_CDC_DATA,
-    ITF_NUM_TOTAL,
-};
+// NCM occupies two interfaces: communication (ITF_NUM_CDC) and data (ITF_NUM_CDC + 1).
+constexpr std::uint8_t ITF_NUM_CDC{0};
+constexpr std::uint8_t ITF_NUM_TOTAL{2};
 
 // Endpoint addresses. Notification is interrupt IN; data is a bulk IN/OUT pair.
 constexpr std::uint8_t EPNUM_NET_NOTIF{0x81};
@@ -53,7 +52,7 @@ constexpr std::uint16_t CONFIG_TOTAL_LEN{TUD_CONFIG_DESC_LEN + TUD_CDC_NCM_DESC_
 constexpr std::uint8_t NET_NOTIF_INTERVAL_MS{50};
 constexpr std::uint8_t NCM_CAPABILITIES{NCM_NETWORK_CAPS_ETH_FILTER | NCM_NETWORK_CAPS_NTB_INPUT_SIZE};
 
-const tusb_desc_device_t desc_device = {
+constexpr tusb_desc_device_t DEVICE_DESCRIPTOR{
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
     .bcdUSB = 0x0200,
@@ -72,7 +71,7 @@ const tusb_desc_device_t desc_device = {
     .bNumConfigurations = 1,
 };
 
-const std::uint8_t desc_fs_configuration[] = {
+constexpr std::array CONFIGURATION_DESCRIPTOR{std::to_array<std::uint8_t>({
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 200),
     // itf, description str, MAC str, notif EP + size, data EP out/in + size,
     // max segment size, notification bInterval, NCM capabilities, number of
@@ -92,56 +91,42 @@ const std::uint8_t desc_fs_configuration[] = {
         CFG_TUD_NET_MTU,
         NET_NOTIF_INTERVAL_MS,
         NCM_CAPABILITIES,
-        pico_ethernet::FrameFilter::MAX_MULTICAST,
-        pico_ethernet::ETHERNET_STATISTICS_BITMAP),
-};
+        FrameFilter::MAX_MULTICAST,
+        ETHERNET_STATISTICS_BITMAP),
+})};
+static_assert(CONFIGURATION_DESCRIPTOR.size() == CONFIG_TOTAL_LEN);
 
-const char* const string_desc_arr[] = {
+// Indexed from STRID_MANUFACTURER.
+constexpr std::array<std::string_view, 4> DESCRIPTOR_STRINGS{
     "pico_ethernet",       // STRID_MANUFACTURER
     "Pico 2 Ethernet NIC", // STRID_PRODUCT
     "0001",                // STRID_SERIAL
     "CDC-NCM",             // STRID_INTERFACE
 };
 
-std::uint16_t desc_str[32 + 1];
+std::array<std::uint16_t, 32 + 1> desc_str{};
 
-} // namespace
-
-extern "C" {
-
-const std::uint8_t* tud_descriptor_device_cb(void) { return reinterpret_cast<const std::uint8_t*>(&desc_device); }
-
-const std::uint8_t* tud_descriptor_configuration_cb(std::uint8_t index) {
-    (void)index;
-    return desc_fs_configuration;
-}
-
-const std::uint16_t* tud_descriptor_string_cb(std::uint8_t index, std::uint16_t langid) {
-    (void)langid;
+// Builds string descriptor `index` into desc_str, or returns nullptr for an unknown
+// index so TinyUSB stalls the request.
+const std::uint16_t* string_descriptor(std::uint8_t index) {
     std::size_t chr_count{0};
 
     if (index == STRID_LANGID) {
         desc_str[1] = 0x0409; // English (United States)
         chr_count = 1;
     } else if (index == STRID_MAC) {
-        const pico_ethernet::MacAddress mac{std::span<const std::uint8_t, pico_ethernet::MacAddress::LENGTH>(
-            tud_network_mac_address, pico_ethernet::MacAddress::LENGTH)};
-        const auto hex = mac.to_imac_string();
-        for (char c : hex) {
+        const MacAddress mac{std::span<const std::uint8_t, MacAddress::LENGTH>{tud_network_mac_address}};
+        for (const char c : mac.to_imac_string()) {
             desc_str[1 + chr_count] = static_cast<std::uint16_t>(c);
             ++chr_count;
         }
     } else {
-        const std::size_t arr_index{static_cast<std::size_t>(index - STRID_MANUFACTURER)};
-        if (arr_index >= sizeof(string_desc_arr) / sizeof(string_desc_arr[0])) {
+        const std::size_t string_index{static_cast<std::size_t>(index - STRID_MANUFACTURER)};
+        if (string_index >= DESCRIPTOR_STRINGS.size()) {
             return nullptr;
         }
-        const char* str{string_desc_arr[arr_index]};
-        chr_count = std::strlen(str);
-        const std::size_t max_count{sizeof(desc_str) / sizeof(desc_str[0]) - 1};
-        if (chr_count > max_count) {
-            chr_count = max_count;
-        }
+        const std::string_view str{DESCRIPTOR_STRINGS[string_index]};
+        chr_count = std::min(str.size(), desc_str.size() - 1);
         for (std::size_t i{0}; i < chr_count; ++i) {
             desc_str[1 + i] = static_cast<std::uint16_t>(str[i]);
         }
@@ -149,7 +134,26 @@ const std::uint16_t* tud_descriptor_string_cb(std::uint8_t index, std::uint16_t 
 
     // First 16-bit word: length in bytes (incl. header) and descriptor type.
     desc_str[0] = static_cast<std::uint16_t>((TUSB_DESC_STRING << 8) | (2 * chr_count + 2));
-    return desc_str;
+    return desc_str.data();
+}
+
+} // namespace
+} // namespace pico_ethernet
+
+extern "C" {
+
+const std::uint8_t* tud_descriptor_device_cb(void) {
+    return reinterpret_cast<const std::uint8_t*>(&pico_ethernet::DEVICE_DESCRIPTOR);
+}
+
+const std::uint8_t* tud_descriptor_configuration_cb(std::uint8_t index) {
+    (void)index;
+    return pico_ethernet::CONFIGURATION_DESCRIPTOR.data();
+}
+
+const std::uint16_t* tud_descriptor_string_cb(std::uint8_t index, std::uint16_t langid) {
+    (void)langid;
+    return pico_ethernet::string_descriptor(index);
 }
 
 } // extern "C"

@@ -11,6 +11,7 @@
 // accepted. Results are reported over the UART (debugprobe console).
 
 #include <array>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -48,12 +49,7 @@ constexpr std::uint32_t LED_PIN{25};
 constexpr std::size_t MAX_WIRE{128};
 constexpr std::size_t MAX_HALFBITS{MAX_WIRE * 8 * 2};
 constexpr std::size_t MAX_WORDS{(MAX_HALFBITS + 31) / 32};
-
-std::uint8_t recovered_octet(std::span<const std::uint32_t> words, std::size_t octet) {
-    // Shift-right autopush packs RX_OCTETS_PER_WORD octets into each word LSB-first,
-    // so octet j is byte j%RX_OCTETS_PER_WORD of the little-endian word.
-    return static_cast<std::uint8_t>(words[octet / RX_OCTETS_PER_WORD] >> (8 * (octet % RX_OCTETS_PER_WORD)));
-}
+constexpr std::size_t RX_WORD_CAPACITY{MAX_WORDS + 16};
 
 // The corrupted run flattens one bit's mid-bit transition to forge a decode
 // fault; the mismatch it produces must land at or after the octet that carries
@@ -123,10 +119,12 @@ struct RxSelfTest {
     std::uint32_t sm_rx{0};
     std::uint32_t off_stim{0};
     std::uint32_t off_rx{0};
-    int dma_stim{-1};
-    int dma_rx{-1};
+    std::int32_t dma_stim{-1};
+    std::int32_t dma_rx{-1};
     std::array<std::uint32_t, MAX_WORDS> stim_words{};
-    std::array<std::uint32_t, MAX_WORDS + 16> rx_words{};
+    // Shift-right autopush packs RX_OCTETS_PER_WORD octets into each DMA'd word
+    // LSB-first, so on this little-endian core the buffer holds the octets in order.
+    alignas(std::uint32_t) std::array<std::uint8_t, RX_WORD_CAPACITY * RX_OCTETS_PER_WORD> rx_octets{};
     pio_sm_config stim_cfg{};
     pio_sm_config rx_cfg{};
 
@@ -177,16 +175,14 @@ struct RxSelfTest {
         // depend on the level a previous run left driven.
         pio_sm_exec(pio, sm_stim, pio_encode_set(pio_pins, 0));
 
-        for (std::uint32_t& w : rx_words) {
-            w = 0;
-        }
+        rx_octets.fill(0);
 
         dma_channel_config cr{dma_channel_get_default_config(dma_rx)};
         channel_config_set_transfer_data_size(&cr, DMA_SIZE_32);
         channel_config_set_read_increment(&cr, false);
         channel_config_set_write_increment(&cr, true);
         channel_config_set_dreq(&cr, pio_get_dreq(pio, sm_rx, false));
-        dma_channel_configure(dma_rx, &cr, rx_words.data(), &pio->rxf[sm_rx], rx_words.size(), true);
+        dma_channel_configure(dma_rx, &cr, rx_octets.data(), &pio->rxf[sm_rx], RX_WORD_CAPACITY, true);
 
         dma_channel_config ct{dma_channel_get_default_config(dma_stim)};
         channel_config_set_transfer_data_size(&ct, DMA_SIZE_32);
@@ -211,7 +207,7 @@ struct RxSelfTest {
 
         dma_channel_abort(dma_rx);
         const std::uint32_t remaining{dma_channel_hw_addr(dma_rx)->transfer_count};
-        return rx_words.size() - remaining;
+        return RX_WORD_CAPACITY - remaining;
     }
 };
 
@@ -242,14 +238,17 @@ std::size_t first_mismatch(RxSelfTest& test, std::span<const std::uint8_t> wire,
 
     const std::size_t comparable{got < wire.size() ? got : wire.size()};
     for (std::size_t i{0}; i < comparable; ++i) {
-        const std::uint8_t b{recovered_octet(test.rx_words, i)};
+        const std::uint8_t b{test.rx_octets[i]};
         if (b != wire[i]) {
-            printf("  octet %u decoded 0x%02X, expected 0x%02X\n", static_cast<unsigned>(i), b, wire[i]);
+            printf("  octet %" PRIu32 " decoded 0x%02X, expected 0x%02X\n", static_cast<std::uint32_t>(i), b, wire[i]);
             return i;
         }
     }
     if (got < wire.size()) {
-        printf("  decoded %u octets, expected %u\n", static_cast<unsigned>(got), static_cast<unsigned>(wire.size()));
+        printf(
+            "  decoded %" PRIu32 " octets, expected %" PRIu32 "\n",
+            static_cast<std::uint32_t>(got),
+            static_cast<std::uint32_t>(wire.size()));
         return got;
     }
     return wire.size();
@@ -257,13 +256,13 @@ std::size_t first_mismatch(RxSelfTest& test, std::span<const std::uint8_t> wire,
 
 } // namespace
 
-int run_selftest() {
+bool run_selftest() {
     set_sys_clock_khz(SYS_CLOCK_HZ / 1000, true);
     stdio_init_all();
     sleep_ms(2500); // let the debugprobe UART console attach
     printf("\nrx_pio_selftest: start\n");
 
-    static const auto built = build_frame(HOST_FRAME);
+    static const auto built{build_frame(HOST_FRAME)};
     bool ok{built.has_value()};
     if (!ok) {
         printf("FAIL: could not build the source wire frame\n");
@@ -282,17 +281,14 @@ int run_selftest() {
         }
 
         // The recovered frame must pass the MAC parser (preamble lock, alignment, FCS).
-        static std::array<std::uint8_t, WIRE_CAPACITY> recovered{};
-        for (std::size_t i{0}; i < wire.size(); ++i) {
-            recovered[i] = recovered_octet(test.rx_words, i);
-        }
         const FrameFilter filter{promiscuous_filter()};
-        const auto parsed = parse_frame(std::span(recovered).first(wire.size()), filter);
+        const auto parsed{parse_frame(std::span{test.rx_octets}.first(wire.size()), filter)};
         if (!parsed) {
             printf("FAIL: parser rejected the cleanly decoded frame\n");
             ok = false;
         } else if (parsed->size() != MIN_FRAME_NO_FCS) {
-            printf("FAIL: parsed host frame length %u unexpected\n", static_cast<unsigned>(parsed->size()));
+            printf(
+                "FAIL: parsed host frame length %" PRIu32 " unexpected\n", static_cast<std::uint32_t>(parsed->size()));
             ok = false;
         }
 
@@ -305,9 +301,9 @@ int run_selftest() {
             ok = false;
         } else if (corrupt_at < CORRUPT_OCTET) {
             printf(
-                "FAIL: mismatch at octet %u precedes the injected fault (octet %u)\n",
-                static_cast<unsigned>(corrupt_at),
-                static_cast<unsigned>(CORRUPT_OCTET));
+                "FAIL: mismatch at octet %" PRIu32 " precedes the injected fault (octet %" PRIu32 ")\n",
+                static_cast<std::uint32_t>(corrupt_at),
+                static_cast<std::uint32_t>(CORRUPT_OCTET));
             ok = false;
         }
 
@@ -321,11 +317,12 @@ int run_selftest() {
         for (std::size_t offset{0}; offset < 8; ++offset) {
             const std::size_t nwords{pack_stimulus(wire, test.stim_words, false, offset, 40)};
             const std::size_t gotwords{test.run(nwords)};
-            const std::span<const std::uint8_t> raw{
-                reinterpret_cast<const std::uint8_t*>(test.rx_words.data()), gotwords * RX_OCTETS_PER_WORD};
+            const std::span<const std::uint8_t> raw{std::span{test.rx_octets}.first(gotwords * RX_OCTETS_PER_WORD)};
             const std::expected<std::size_t, FrameError> len{recover_frame(raw, aligned)};
             if (!len || *len != body.size()) {
-                printf("FAIL: offset %u: recover_frame did not recover the frame\n", static_cast<unsigned>(offset));
+                printf(
+                    "FAIL: offset %" PRIu32 ": recover_frame did not recover the frame\n",
+                    static_cast<std::uint32_t>(offset));
                 ok = false;
                 continue;
             }
@@ -337,7 +334,8 @@ int run_selftest() {
                 }
             }
             if (!match) {
-                printf("FAIL: offset %u: recovered frame bytes mismatch\n", static_cast<unsigned>(offset));
+                printf(
+                    "FAIL: offset %" PRIu32 ": recovered frame bytes mismatch\n", static_cast<std::uint32_t>(offset));
                 ok = false;
             }
         }
@@ -350,13 +348,12 @@ int run_selftest() {
         for (std::size_t offset{0}; offset < 8; ++offset) {
             const std::size_t nwords{pack_stimulus(wire, test.stim_words, false, offset, 0)};
             const std::size_t gotwords{test.run(nwords, true)};
-            const std::span<const std::uint8_t> raw{
-                reinterpret_cast<const std::uint8_t*>(test.rx_words.data()), gotwords * RX_OCTETS_PER_WORD};
+            const std::span<const std::uint8_t> raw{std::span{test.rx_octets}.first(gotwords * RX_OCTETS_PER_WORD)};
             const std::expected<std::size_t, FrameError> len{recover_frame(raw, aligned)};
             if (!len || *len != body.size()) {
                 printf(
-                    "FAIL: offset %u: flushed recover_frame did not recover the frame\n",
-                    static_cast<unsigned>(offset));
+                    "FAIL: offset %" PRIu32 ": flushed recover_frame did not recover the frame\n",
+                    static_cast<std::uint32_t>(offset));
                 ok = false;
                 continue;
             }
@@ -368,7 +365,9 @@ int run_selftest() {
                 }
             }
             if (!match) {
-                printf("FAIL: offset %u: flushed recovered frame bytes mismatch\n", static_cast<unsigned>(offset));
+                printf(
+                    "FAIL: offset %" PRIu32 ": flushed recovered frame bytes mismatch\n",
+                    static_cast<std::uint32_t>(offset));
                 ok = false;
             }
         }
@@ -385,9 +384,9 @@ int run_selftest() {
     while (true) {
         sleep_ms(10'000);
     }
-    return ok ? 0 : 1;
+    return ok;
 }
 
 } // namespace pico_ethernet
 
-int main() { return pico_ethernet::run_selftest(); }
+int main() { return pico_ethernet::run_selftest() ? 0 : 1; }

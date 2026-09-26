@@ -23,7 +23,7 @@ class MacAddress {
     static constexpr std::size_t LENGTH{6};
     using Bytes = std::array<std::uint8_t, LENGTH>;
 
-    static constexpr Bytes DEFAULT_PHASE1 = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+    static constexpr Bytes DEFAULT_BYTES{0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
 
     constexpr MacAddress() = default;
 
@@ -38,13 +38,13 @@ class MacAddress {
     }
 
     static constexpr MacAddress generate_default() {
-        return MacAddress(std::span<const std::uint8_t, LENGTH>(DEFAULT_PHASE1));
+        return MacAddress(std::span<const std::uint8_t, LENGTH>(DEFAULT_BYTES));
     }
 
     // Parse "AABBCCDDEEFF" or "AA:BB:CC:DD:EE:FF" (also '-' or '.' separators).
     // Hex is case-insensitive; the separator must be consistent. Returns nullopt
     // on any malformed input.
-    static constexpr std::optional<MacAddress> parse(std::string_view str) {
+    [[nodiscard]] static constexpr std::optional<MacAddress> parse(std::string_view str) {
         Bytes out{};
 
         if (str.size() == LENGTH * 2) { // no separators: 12 hex digits
@@ -115,8 +115,8 @@ class MacAddress {
 
     constexpr bool operator==(const MacAddress&) const = default;
 
-    constexpr const std::uint8_t* begin() const { return address_.data(); }
-    constexpr const std::uint8_t* end() const { return address_.data() + address_.size(); }
+    constexpr Bytes::const_iterator begin() const { return address_.begin(); }
+    constexpr Bytes::const_iterator end() const { return address_.end(); }
     constexpr std::size_t size() const { return address_.size(); }
 
   private:
@@ -126,8 +126,8 @@ class MacAddress {
     // Parse exactly two hex digits into `out`; false if not two hex digits.
     static constexpr bool parse_octet(std::string_view pair, std::uint8_t& out) {
         assert(pair.size() == 2);
-        const auto hi = hex_digit(pair[0]);
-        const auto lo = hex_digit(pair[1]);
+        const std::optional<std::uint8_t> hi{hex_digit(pair[0])};
+        const std::optional<std::uint8_t> lo{hex_digit(pair[1])};
         if (!hi || !lo)
             return false;
         out = static_cast<std::uint8_t>((*hi << 4) | *lo);

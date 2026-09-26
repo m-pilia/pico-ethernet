@@ -52,8 +52,8 @@ TEST(RxSlotRing, FullRingDropsNewestAndCountsOverflow) {
 
 TEST(RxSlotRing, SlotsAndCounterWrapAround) {
     RxSlotRing<4> ring;
-    ring.publish(1);
-    ring.publish(2);
+    ASSERT_EQ(ring.publish(1), 1u);
+    ASSERT_EQ(ring.publish(2), 2u);
     ring.release(); // drop slot 0; read advances to 1
 
     EXPECT_EQ(ring.publish(3), 3u);

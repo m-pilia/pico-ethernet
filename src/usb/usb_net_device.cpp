@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include "hardware/irq.h"
@@ -16,7 +17,6 @@
 
 #include "tusb.h"
 
-// Shared USB interrupt handler driving tud_task_ext(); defined below.
 extern "C" void pico_ethernet_usb_irq_handler(void);
 
 namespace pico_ethernet {
@@ -88,7 +88,6 @@ void UsbNetDevice::task() {
     // is read directly rather than latched; only a change reaches the host.
     publish_link_state(phy_.link_up());
 
-    // Move host frames the USB ISR queued into the PHY transmit path.
     drain_usb_tx();
 
     // Mirror the interrupt-maintained PHY counters into the stats.
@@ -140,13 +139,13 @@ void UsbNetDevice::drain_usb_tx() {
     for (;;) {
         const std::size_t tail{usb_tx_tail_.load(std::memory_order_relaxed)};
         if (tail == usb_tx_head_.load(std::memory_order_acquire)) {
-            return; // queue empty
+            return;
         }
         WireFrame* const slot{phy_.tx_slot()};
         if (slot == nullptr) {
             return; // PHY TX full; the host frame keeps its place until a slot frees
         }
-        const std::span<const std::uint8_t> raw{usb_tx_slots_[tail].data.data(), usb_tx_slots_[tail].len};
+        const std::span<const std::uint8_t> raw{std::span{usb_tx_slots_[tail].data}.first(usb_tx_slots_[tail].len)};
         const auto result{build_frame(raw, *slot)};
         usb_tx_tail_.store(usb_tx_advance(tail), std::memory_order_release);
         if (!result) {
@@ -266,7 +265,7 @@ void UsbNetDevice::on_network_init() {
 bool UsbNetDevice::on_get_statistic(std::uint16_t selector, std::uint32_t& value) const {
     // Runs in the USB ISR. It reads the counters without a lock: every one of them
     // has a single writer (see TxStats), so each aligned 32-bit read is coherent.
-    const auto result = ethernet_statistic(selector, stats_, rx_stats_, phy_.csma_stats());
+    const std::optional<std::uint32_t> result{ethernet_statistic(selector, stats_, rx_stats_, phy_.csma_stats())};
     if (!result) {
         return false;
     }
@@ -286,7 +285,7 @@ extern "C" {
 void pico_ethernet_usb_irq_handler(void) { tud_task_ext(0, true); }
 
 // Defined by the application; TinyUSB reads it for the iMACAddress descriptor.
-std::uint8_t tud_network_mac_address[6] = {0};
+std::uint8_t tud_network_mac_address[pico_ethernet::MacAddress::LENGTH]{};
 
 bool tud_network_recv_cb(const std::uint8_t* src, std::uint16_t size) {
     if (pico_ethernet::g_instance == nullptr)

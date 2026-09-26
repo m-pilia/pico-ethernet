@@ -54,21 +54,21 @@ FrameFilter promiscuous() {
 } // namespace
 
 TEST(FrameParserTest, RoundTripRecoversHostFrame) {
-    const auto host = make_host_frame(OUR_MAC, 100);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(OUR_MAC, 100)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
 
-    const auto parsed = parse_frame(built->view(), promiscuous());
+    const auto parsed{parse_frame(built->view(), promiscuous())};
     ASSERT_TRUE(parsed.has_value());
     EXPECT_TRUE(std::ranges::equal(*parsed, host));
 }
 
 TEST(FrameParserTest, RoundTripRecoversPaddedShortFrame) {
-    const auto host = make_host_frame(OUR_MAC, 20);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(OUR_MAC, 20)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
 
-    const auto parsed = parse_frame(built->view(), promiscuous());
+    const auto parsed{parse_frame(built->view(), promiscuous())};
     ASSERT_TRUE(parsed.has_value());
     // The recovered frame is the padded 60-byte frame, not the original 20.
     EXPECT_EQ(parsed->size(), MIN_FRAME_NO_FCS);
@@ -77,80 +77,80 @@ TEST(FrameParserTest, RoundTripRecoversPaddedShortFrame) {
 
 TEST(FrameParserTest, RejectsMissingSfd) {
     const std::vector<std::uint8_t> all_preamble(PREAMBLE_LEN, PREAMBLE_BYTE);
-    const auto parsed = parse_frame(all_preamble, promiscuous());
+    const auto parsed{parse_frame(all_preamble, promiscuous())};
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), FrameError::BadPreamble);
 }
 
 TEST(FrameParserTest, RejectsGarbagePrefix) {
     const std::array<std::uint8_t, 4> garbage{0x00, 0x11, 0x22, 0x33};
-    const auto parsed = parse_frame(garbage, promiscuous());
+    const auto parsed{parse_frame(garbage, promiscuous())};
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), FrameError::BadPreamble);
 }
 
 TEST(FrameParserTest, RejectsRunt) {
     const std::vector<std::uint8_t> short_mac(MIN_FRAME_WITH_FCS - 1, 0xAB);
-    const auto wire = wrap_with_preamble(short_mac);
-    const auto parsed = parse_frame(wire, promiscuous());
+    const auto wire{wrap_with_preamble(short_mac)};
+    const auto parsed{parse_frame(wire, promiscuous())};
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), FrameError::Runt);
 }
 
 TEST(FrameParserTest, RejectsGiant) {
     const std::vector<std::uint8_t> long_mac(MAX_FRAME_WITH_FCS + 1, 0xAB);
-    const auto wire = wrap_with_preamble(long_mac);
-    const auto parsed = parse_frame(wire, promiscuous());
+    const auto wire{wrap_with_preamble(long_mac)};
+    const auto parsed{parse_frame(wire, promiscuous())};
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), FrameError::Giant);
 }
 
 TEST(FrameParserTest, TrimsTrailingGarbageAfterFcs) {
-    const auto host = make_host_frame(OUR_MAC, 100);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(OUR_MAC, 100)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
 
     // Emulate the carrier-gated decoder capturing past the FCS into trailing noise.
     std::vector<std::uint8_t> wire(built->view().begin(), built->view().end());
     wire.insert(wire.end(), {0xDE, 0xAD, 0xBE, 0xEF, 0x55, 0x00});
 
-    const auto parsed = parse_frame(wire, promiscuous());
+    const auto parsed{parse_frame(wire, promiscuous())};
     ASSERT_TRUE(parsed.has_value());
     EXPECT_TRUE(std::ranges::equal(*parsed, host));
 }
 
 TEST(FrameParserTest, RejectsCorruptedFcs) {
-    const auto host = make_host_frame(OUR_MAC, 100);
-    auto built = build_frame(host);
+    const auto host{make_host_frame(OUR_MAC, 100)};
+    auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
     // Flip a payload bit inside the frame (after preamble/SFD), keeping length valid.
     built->bytes[PREAMBLE_SFD_LEN + MAC_HEADER_LEN] ^= 0x01;
 
-    const auto parsed = parse_frame(built->view(), promiscuous());
+    const auto parsed{parse_frame(built->view(), promiscuous())};
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), FrameError::BadFcs);
 }
 
 TEST(FrameParserTest, DirectedFilterAcceptsOurFrame) {
-    const auto host = make_host_frame(OUR_MAC, 100);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(OUR_MAC, 100)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
 
     FrameFilter filter{OUR_MAC};
     filter.set_packet_filter(FrameFilter::DIRECTED);
-    const auto parsed = parse_frame(built->view(), filter);
+    const auto parsed{parse_frame(built->view(), filter)};
     ASSERT_TRUE(parsed.has_value());
     EXPECT_TRUE(std::ranges::equal(*parsed, host));
 }
 
 TEST(FrameParserTest, DirectedFilterRejectsForeignFrame) {
-    const auto host = make_host_frame(OTHER_MAC, 100);
-    const auto built = build_frame(host);
+    const auto host{make_host_frame(OTHER_MAC, 100)};
+    const auto built{build_frame(host)};
     ASSERT_TRUE(built.has_value());
 
     FrameFilter filter{OUR_MAC};
     filter.set_packet_filter(FrameFilter::DIRECTED);
-    const auto parsed = parse_frame(built->view(), filter);
+    const auto parsed{parse_frame(built->view(), filter)};
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), FrameError::Filtered);
 }

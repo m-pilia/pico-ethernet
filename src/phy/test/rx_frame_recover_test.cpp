@@ -58,7 +58,7 @@ std::vector<std::uint8_t> stream_at_offset(std::span<const std::uint8_t> wire, s
 }
 
 TEST(RxFrameRecover, RecoversFrameAtEveryBitOffset) {
-    const auto built = build_frame(HOST_FRAME);
+    const auto built{build_frame(HOST_FRAME)};
     ASSERT_TRUE(built.has_value());
     const std::span<const std::uint8_t> wire{built->view()};
     const std::span<const std::uint8_t> body{wire.subspan(PREAMBLE_SFD_LEN)}; // destination..FCS
@@ -79,7 +79,7 @@ TEST(RxFrameRecover, RecoversFrameAtEveryBitOffset) {
 // The single pass must stop at the FCS residual and ignore whatever the
 // carrier-gated capture ran on into after the frame.
 TEST(RxFrameRecover, DelimitsFrameIgnoringTrailingJunk) {
-    const auto built = build_frame(HOST_FRAME);
+    const auto built{build_frame(HOST_FRAME)};
     ASSERT_TRUE(built.has_value());
     const std::span<const std::uint8_t> wire{built->view()};
     const std::span<const std::uint8_t> body{wire.subspan(PREAMBLE_SFD_LEN)};
@@ -103,7 +103,7 @@ TEST(RxFrameRecover, DelimitsFrameIgnoringTrailingJunk) {
 }
 
 TEST(RxFrameRecover, CorruptedFrameFailsFcs) {
-    const auto built = build_frame(HOST_FRAME);
+    const auto built{build_frame(HOST_FRAME)};
     ASSERT_TRUE(built.has_value());
     const std::span<const std::uint8_t> wire{built->view()};
 

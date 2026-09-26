@@ -11,6 +11,7 @@
 // is reported over the UART (debugprobe console).
 
 #include <array>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -129,9 +130,9 @@ bool analyze(const SelfTest& t) {
         const std::size_t count{is_stall(run) ? 1 : half_bits_in(run)};
         if (count == 0) {
             printf(
-                "FAIL: run at %u len %u is not one or two half-bits (%s)\n",
-                static_cast<unsigned>(run.start),
-                static_cast<unsigned>(run.len),
+                "FAIL: run at %" PRIu32 " len %" PRIu32 " is not one or two half-bits (%s)\n",
+                static_cast<std::uint32_t>(run.start),
+                static_cast<std::uint32_t>(run.len),
                 level_name(run.level));
             return false;
         }
@@ -140,8 +141,8 @@ bool analyze(const SelfTest& t) {
         for (std::size_t i{0}; i < count && half_bits < FRAME_HALFBITS; ++i) {
             if (run.level != t.expected[half_bits].level) {
                 printf(
-                    "FAIL: half-bit %u is %s, expected %s\n",
-                    static_cast<unsigned>(half_bits),
+                    "FAIL: half-bit %" PRIu32 " is %s, expected %s\n",
+                    static_cast<std::uint32_t>(half_bits),
                     level_name(run.level),
                     level_name(t.expected[half_bits].level));
                 return false;
@@ -152,16 +153,18 @@ bool analyze(const SelfTest& t) {
 
     if (half_bits != FRAME_HALFBITS) {
         printf(
-            "FAIL: recovered %u half-bits, expected %u\n",
-            static_cast<unsigned>(half_bits),
-            static_cast<unsigned>(FRAME_HALFBITS));
+            "FAIL: recovered %" PRIu32 " half-bits, expected %" PRIu32 "\n",
+            static_cast<std::uint32_t>(half_bits),
+            static_cast<std::uint32_t>(FRAME_HALFBITS));
         return false;
     }
 
     // Every bit took both its arms of the branch, in real time.
     const std::size_t span{frame_end - frame_start};
     printf(
-        "  frame span = %u cycles (expected %u)\n", static_cast<unsigned>(span), static_cast<unsigned>(FRAME_SAMPLES));
+        "  frame span = %" PRIu32 " cycles (expected %" PRIu32 ")\n",
+        static_cast<std::uint32_t>(span),
+        static_cast<std::uint32_t>(FRAME_SAMPLES));
     if (span + RUN_TOLERANCE_SAMPLES < FRAME_SAMPLES || span > FRAME_SAMPLES + RUN_TOLERANCE_SAMPLES) {
         printf("FAIL: frame duration off the nominal bit time\n");
         return false;
@@ -171,7 +174,7 @@ bool analyze(const SelfTest& t) {
 
 } // namespace
 
-int run_selftest() {
+bool run_selftest() {
     set_sys_clock_khz(SYS_CLOCK_HZ / 1000, true);
     stdio_init_all();
 
@@ -213,9 +216,9 @@ int run_selftest() {
         sleep_ms(10'000);
     }
 
-    return ok ? 0 : 1;
+    return ok;
 }
 
 } // namespace pico_ethernet
 
-int main() { return pico_ethernet::run_selftest(); }
+int main() { return pico_ethernet::run_selftest() ? 0 : 1; }

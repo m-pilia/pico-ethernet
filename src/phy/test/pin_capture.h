@@ -22,11 +22,11 @@ namespace pico_ethernet {
 // clock, so the capture measures true symbol timing rather than relative cycle
 // structure, and the transmit driver can stay connected because no symbol is
 // stretched towards DC.
-template <std::size_t WORDS>
+template <std::size_t WordCount>
 class PinCapture {
   public:
     static constexpr std::size_t SAMPLES_PER_WORD{16};
-    static constexpr std::size_t SAMPLE_COUNT{WORDS * SAMPLES_PER_WORD};
+    static constexpr std::size_t SAMPLE_COUNT{WordCount * SAMPLES_PER_WORD};
 
     [[nodiscard]] bool configure(PIO pio, std::uint32_t base_pin) {
         pio_ = pio;
@@ -34,7 +34,7 @@ class PinCapture {
             return false;
         }
         const std::uint32_t offset{static_cast<std::uint32_t>(pio_add_program(pio_, &pin_capture_program))};
-        const int sm{pio_claim_unused_sm(pio_, false)};
+        const std::int32_t sm{pio_claim_unused_sm(pio_, false)};
         dma_ = dma_claim_unused_channel(false);
         if (sm < 0 || dma_ < 0) {
             return false;
@@ -63,7 +63,7 @@ class PinCapture {
         channel_config_set_read_increment(&c, false);
         channel_config_set_write_increment(&c, true);
         channel_config_set_dreq(&c, pio_get_dreq(pio_, sm_, false));
-        dma_channel_configure(dma_, &c, words_.data(), &pio_->rxf[sm_], WORDS, true);
+        dma_channel_configure(dma_, &c, words_.data(), &pio_->rxf[sm_], WordCount, true);
     }
 
     // Starts sampling on its own, for an observed machine whose start the test does
@@ -86,8 +86,8 @@ class PinCapture {
   private:
     PIO pio_{};
     std::uint32_t sm_{0};
-    int dma_{-1};
-    std::array<std::uint32_t, WORDS> words_{};
+    std::int32_t dma_{-1};
+    std::array<std::uint32_t, WordCount> words_{};
 };
 
 } // namespace pico_ethernet

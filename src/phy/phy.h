@@ -181,8 +181,8 @@ class Phy {
     std::uint32_t offset_qualify_{0};
     pio_sm_config tx_cfg_{};
     pio_sm_config rx_cfg_{};
-    int dma_tx_{-1};
-    int dma_rx_{-1};
+    std::int32_t dma_tx_{-1};
+    std::int32_t dma_rx_{-1};
 
     // The link pulse alarm's own state.
     NlpScheduler nlp_{};
@@ -269,13 +269,15 @@ class Phy {
     static constexpr std::size_t RX_TRAILING_OCTETS{RX_OCTETS_PER_WORD - 1};
     static constexpr std::size_t RX_WORD_CAPACITY{
         (WIRE_CAPACITY + RX_TRAILING_OCTETS + RX_OCTETS_PER_WORD - 1) / RX_OCTETS_PER_WORD};
+    static constexpr std::size_t RX_OCTET_CAPACITY{RX_WORD_CAPACITY * RX_OCTETS_PER_WORD};
 
     // A pool of capture buffers so the DMA can start the next frame the instant one
     // ends (the EOF interrupt hands it a free buffer) while the main loop is still
     // draining an earlier one -- capture and processing overlap instead of taking
     // turns. rx_ring_ tracks which buffer is capturing and which are completed.
+    // Held as octets but word-aligned, since the DMA writes whole words into them.
     static constexpr std::size_t RX_POOL_SIZE{6};
-    std::array<std::array<std::uint32_t, RX_WORD_CAPACITY>, RX_POOL_SIZE> rx_pool_{};
+    alignas(std::uint32_t) std::array<std::array<std::uint8_t, RX_OCTET_CAPACITY>, RX_POOL_SIZE> rx_pool_{};
     RxSlotRing<RX_POOL_SIZE> rx_ring_{};
 
     // Written only in on_rx_eof() (end-of-frame interrupt), and consumed by the loop

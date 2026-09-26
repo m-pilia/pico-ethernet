@@ -39,7 +39,7 @@ class RxSlotRing {
     // `word_count` words and move the capture on to the next free slot. If the ring
     // is full the frame is dropped (overflow counter bumped) and the capture slot is
     // left unchanged. Returns the slot to capture into next.
-    std::size_t publish(std::size_t word_count) {
+    [[nodiscard]] std::size_t publish(std::size_t word_count) {
         const std::size_t write{write_.load(std::memory_order_relaxed)};
         const std::size_t next{advance(write)};
         if (next == read_.load(std::memory_order_acquire)) {

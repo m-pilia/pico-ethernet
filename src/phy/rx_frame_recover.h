@@ -76,7 +76,7 @@ recover_frame(std::span<const std::uint8_t> raw, std::span<std::uint8_t> out) {
     std::uint32_t crc{0xFFFFFFFFu};
     std::size_t len{0};
     for (std::size_t i{byte_base}; i < last; ++i) {
-        const unsigned high{bit_off == 0 ? 0u : static_cast<unsigned>(raw[i + 1]) << (8 - bit_off)};
+        const std::uint32_t high{bit_off == 0 ? 0u : static_cast<std::uint32_t>(raw[i + 1]) << (8 - bit_off)};
         const std::uint8_t byte{static_cast<std::uint8_t>((raw[i] >> bit_off) | high)};
         out[len] = byte;
         crc = detail::CRC32_TABLE[(crc ^ byte) & 0xFFu] ^ (crc >> 8);

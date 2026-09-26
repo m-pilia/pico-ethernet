@@ -67,7 +67,7 @@ class LedHeartbeat {
     }
 
     static bool on_timer(repeating_timer_t* timer) {
-        auto& self = *static_cast<LedHeartbeat*>(timer->user_data);
+        LedHeartbeat& self{*static_cast<LedHeartbeat*>(timer->user_data)};
         self.on_ = !self.on_;
         gpio_put(self.pin_, self.on_);
         return true; // keep repeating

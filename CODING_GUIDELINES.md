@@ -12,6 +12,10 @@ firmware and host-testable code under `src/`.
 | **Disable C++ exceptions in compiler** | Enforce the no-exceptions rule at compile time | Add `-fno-exceptions` to compiler flags |
 | **Assert preconditions** | Catch contract violations (out-of-range indices, wrong sizes) at the point of misuse, with zero cost in release builds | See "Preconditions and Assertions" below |
 
+Host-only unit tests are exempt from the no-dynamic-allocation rule: they never
+run on the target, so standard containers such as `std::vector` may build their
+inputs. On-target self-tests are not exempt.
+
 ## Preconditions and Assertions
 
 Validate caller-supplied preconditions with `assert()` from `<cassert>`.
@@ -200,12 +204,17 @@ cxx_flag = "-fno-rtti"
 
 | Element | Convention | Examples |
 |---------|------------|----------|
-| **Namespace** | Single flat namespace | `pico_ethernet` (no nested namespaces) |
+| **Namespace** | Single flat namespace | `pico_ethernet` (no nested namespaces, except `detail`; see below) |
 | **Classes/Structs** | `UpperCamelCase` | `MacAddress`, `UsbNetDevice` |
 | **Methods/Functions** | `snake_case` | `parse()`, `to_string()`, `initialize()` |
 | **Variables** | `snake_case` | `mac_address`, `config_`, `is_connected` |
 | **Constants** | `UPPER_SNAKE_CASE` | `DEFAULT_MAC`, `MAX_BUFFER_SIZE` |
+| **Enumerators** | `UpperCamelCase` | `Duplex::Half`, `FrameError::BadFcs` |
 | **Template Parameters** | `UpperCamelCase` | `typename T`, `class Descriptor` |
+
+A nested `detail` namespace is allowed for implementation helpers that must live
+at namespace scope (e.g. a table shared by header-only functions) but are not
+part of the public API.
 
 ## Comment Rules
 
@@ -233,8 +242,8 @@ static std::optional<MacAddress> parse(std::string_view mac_str);
 **Good Examples (Keep):**
 ```cpp
 // 02:00:00:00:00:01 - Locally administered (bit 1 = 1), unicast (bit 0 = 0)
-static constexpr Bytes DEFAULT_PHASE1 = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+static constexpr Bytes DEFAULT_BYTES{0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
 
-// Link is always down for Phase 1 (cable unplugged simulation)
-bool link_up_ = false;
+// One slot stays free to tell full from empty, so N slots queue N-1 frames.
+static constexpr std::size_t TX_QUEUE_SIZE{5};
 ```

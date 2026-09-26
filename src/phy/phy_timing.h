@@ -62,12 +62,61 @@ inline constexpr std::uint32_t LINK_UP_EVENTS{3};
 // itself, so a busy line barely shifts the pulse train.
 inline constexpr std::uint32_t NLP_RETRY_MS{1};
 
+// Shortest spacing from the previous valid NLP at which a lone link pulse counts as
+// one (link_test_min, 2-7 ms): the receiver takes the tolerant end of the range.
+inline constexpr std::uint32_t LINK_TEST_MIN_US{2'000};
+
+// Fast Link Pulse burst (IEEE 802.3 Clause 28): 17 clock pulses, each followed by a
+// data pulse for a 1 bit of the 16-bit link code word, D0 first. Both halves of a
+// clock period sit in the interval-timer window, splitting its 125 us midpoint
+// period.
+inline constexpr std::uint32_t FLP_INTERVAL_MIN_NS{55'500};
+inline constexpr std::uint32_t FLP_INTERVAL_MAX_NS{69'500};
+inline constexpr std::uint32_t FLP_CLOCK_TO_DATA_US{62};
+inline constexpr std::uint32_t FLP_DATA_TO_CLOCK_US{63};
+inline constexpr std::uint32_t FLP_CLOCK_PERIOD_US{FLP_CLOCK_TO_DATA_US + FLP_DATA_TO_CLOCK_US};
+inline constexpr std::uint32_t FLP_CLOCK_PULSES{17};
+inline constexpr std::uint32_t FLP_BURST_US{(FLP_CLOCK_PULSES - 1) * FLP_CLOCK_PERIOD_US};
+static_assert(FLP_CLOCK_TO_DATA_US * 1000 >= FLP_INTERVAL_MIN_NS && FLP_CLOCK_TO_DATA_US * 1000 <= FLP_INTERVAL_MAX_NS);
+static_assert(FLP_DATA_TO_CLOCK_US * 1000 >= FLP_INTERVAL_MIN_NS && FLP_DATA_TO_CLOCK_US * 1000 <= FLP_INTERVAL_MAX_NS);
+static_assert(FLP_CLOCK_PERIOD_US == 125);
+
+// First pulse to first pulse of consecutive bursts, fixed inside the burst period
+// range; the silence between bursts then sits inside transmit_link_burst_timer
+// (5.7-22.3 ms).
+inline constexpr std::uint32_t FLP_BURST_PERIOD_MIN_US{8'000};
+inline constexpr std::uint32_t FLP_BURST_PERIOD_MAX_US{16'000};
+inline constexpr std::uint32_t FLP_BURST_PERIOD_US{12'000};
+static_assert(FLP_BURST_PERIOD_US >= FLP_BURST_PERIOD_MIN_US && FLP_BURST_PERIOD_US <= FLP_BURST_PERIOD_MAX_US);
+static_assert(FLP_BURST_PERIOD_US - FLP_BURST_US >= 5'700 && FLP_BURST_PERIOD_US - FLP_BURST_US <= 22'300);
+
+// Arbitration timers, each at the midpoint of its standard range.
+inline constexpr std::uint32_t BREAK_LINK_US{(1'200'000 + 1'500'000) / 2};
+inline constexpr std::uint32_t LINK_FAIL_INHIBIT_US{(750'000 + 1'000'000) / 2};
+inline constexpr std::uint32_t AUTONEG_WAIT_US{(500'000 + 1'000'000) / 2};
+inline constexpr std::uint32_t COMPLETE_ACK_BURSTS{(6 + 8) / 2};
+
+// Link-pulse receive windows, each at the tolerant end of its standard range. A
+// pulse closer than FLP_TEST_MIN_US to the previous one is noise, and one further
+// than FLP_TEST_MAX_US starts a new burst. Within a burst, a pulse DATA_DETECT_MIN_US
+// to DATA_DETECT_MAX_US after a clock pulse is a data pulse. Code words from bursts
+// NLP_TEST_MIN_US to NLP_TEST_MAX_US apart are consecutive.
+inline constexpr std::uint32_t FLP_TEST_MIN_US{5};
+inline constexpr std::uint32_t FLP_TEST_MAX_US{185};
+inline constexpr std::uint32_t DATA_DETECT_MIN_US{15};
+inline constexpr std::uint32_t DATA_DETECT_MAX_US{100};
+inline constexpr std::uint32_t NLP_TEST_MIN_US{5'000};
+inline constexpr std::uint32_t NLP_TEST_MAX_US{150'000};
+static_assert(DATA_DETECT_MIN_US < FLP_CLOCK_TO_DATA_US && FLP_CLOCK_TO_DATA_US < DATA_DETECT_MAX_US);
+static_assert(DATA_DETECT_MAX_US < FLP_CLOCK_PERIOD_US && FLP_CLOCK_PERIOD_US < FLP_TEST_MAX_US);
+
 // The system PLL is run at 120 MHz (an underclock, not an overclock) so that a
 // 50 ns half-bit is an integer number of PIO cycles: 120 MHz * 50 ns = 6 cycles.
 // A /1 PIO clock then places every symbol edge on an exact cycle boundary with no
 // fractional-divider jitter. The USB controller runs off the independent 48 MHz
 // USB PLL, so this does not disturb CDC-NCM.
 inline constexpr std::uint32_t SYS_CLOCK_HZ{120'000'000};
+inline constexpr std::uint32_t SYS_CYCLES_PER_US{SYS_CLOCK_HZ / 1'000'000};
 inline constexpr std::uint32_t PIO_CYCLES_PER_HALF_BIT{
     static_cast<std::uint32_t>(static_cast<std::uint64_t>(SYS_CLOCK_HZ) * HALF_BIT_NS / 1'000'000'000)};
 inline constexpr std::uint32_t PIO_CYCLES_PER_BIT{2 * PIO_CYCLES_PER_HALF_BIT};

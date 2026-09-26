@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include "hardware/dma.h"
@@ -15,7 +16,9 @@
 #include "pico/stdlib.h" // IWYU pragma: keep  (alarm_id_t, repeating timers)
 
 #include "src/mac/ethernet_frame.h"
+#include "src/phy/autoneg.h"
 #include "src/phy/csma_cd.h"
+#include "src/phy/duplex.h"
 #include "src/phy/link_pulse.h"
 #include "src/phy/link_state.h"
 #include "src/phy/phy_stats.h"
@@ -26,7 +29,7 @@ namespace pico_ethernet {
 
 // Software 10BASE-T PHY. Transmit: serializes complete MAC wire frames as
 // Manchester symbols on the differential pair {TXP, TXN} using one PIO state
-// machine fed by DMA, and emits Normal Link Pulses when the line is idle. Receive:
+// machine fed by DMA, and emits link pulses when the line is idle. Receive:
 // a second PIO SM slices the RXD/RXC comparator outputs back into octets via DMA
 // into a pool of capture buffers; the
 // RXC falling edge (end of frame) is finalized in an interrupt that hands the DMA
@@ -34,13 +37,18 @@ namespace pico_ethernet {
 // main loop. The system clock is run at 120 MHz so a 50 ns half-bit is an exact 6
 // PIO cycles.
 //
-// The station is half-duplex: RXC is carrier sense as well as end-of-frame, so
-// transmission defers to an occupied medium, and a carrier that appears mid-transmit
-// and stays asserted for CARRIER_QUALIFY_US is a collision. Both are routed through
-// CsmaCd, which decides deferral, backoff and abandonment; this class performs the
-// hardware actions those decisions call for.
-// RXC activity also feeds LinkState, whose up/down verdict the host-facing link
-// notification follows.
+// The link comes up by autonegotiation, or by parallel detection for a peer that
+// only sends NLPs. Link pulses -- NLPs and FLP bursts -- go out from a timer alarm
+// and are decoded in the carrier interrupt; Autoneg arbitrates in the main loop, and
+// once the link is up LinkState's link integrity verdict keeps it up. The host-facing
+// link notification follows the result.
+//
+// In half duplex RXC is carrier sense as well as end-of-frame, so transmission
+// defers to an occupied medium, and a carrier that appears mid-transmit and stays
+// asserted for CARRIER_QUALIFY_US is a collision. Both are routed through CsmaCd,
+// which decides deferral, backoff and abandonment; this class performs the hardware
+// actions those decisions call for. In full duplex the pairs are independent, and
+// only the interframe gap still holds a frame back.
 class Phy {
   public:
     struct Pins {
@@ -74,9 +82,9 @@ class Phy {
     Phy& operator=(const Phy&) = delete;
 
     // Sets the 120 MHz system clock, loads the PIO programs, configures the state
-    // machines, DMA channels and GPIOs, arms the receiver, and starts the NLP
-    // cadence. Call once before the first transmit. Returns false if PIO/DMA
-    // resources could not be claimed.
+    // machines, DMA channels and GPIOs, arms the receiver, and starts the link pulse
+    // alarm. Call once before the first transmit. Returns false if PIO/DMA resources
+    // could not be claimed.
     [[nodiscard]] bool initialize();
 
     // The queue slot to build the next wire frame (preamble..FCS) into, or nullptr
@@ -93,11 +101,12 @@ class Phy {
     // True while a frame is being clocked out.
     [[nodiscard]] bool transmitting() const;
 
-    // Drives the transmit side and the link timer: resolves the attempt that just
-    // ended, starts the next queued frame once CSMA/CD allows it, and discards
-    // queued frames while the link is down. Collision response (abort, jam) happens
-    // in the carrier-qualification interrupt, and end-of-transmit finalization in
-    // the TX-DMA completion interrupt, not here. Call from the loop.
+    // Drives the link and the transmit side: advances autonegotiation and the link
+    // integrity test, resolves the attempt that just ended, starts the next queued
+    // frame once the transmit policy allows it, and discards queued frames while the
+    // link is down. Collision response (abort, jam) happens in the
+    // carrier-qualification interrupt, and end-of-transmit finalization in the TX-DMA
+    // completion interrupt, not here. Call from the loop.
     void service();
 
     // Dequeues one frame the end-of-frame interrupt captured, recovers it in a
@@ -109,10 +118,10 @@ class Phy {
     // recovering it. Lets the drain test for work before touching the USB path.
     [[nodiscard]] bool rx_pending() const { return rx_ring_.peek().has_value(); }
 
-    // The link integrity verdict: whether enough link activity has arrived recently
-    // for the line to count as connected. Follows the wire, so it is false until a
-    // peer is seen. Main-loop state, updated by service().
-    [[nodiscard]] bool link_up() const { return link_.up(); }
+    // Whether autonegotiation or parallel detection has brought the link up, and the
+    // link integrity test has kept it up since. Follows the wire, so it is false until
+    // a peer is seen. Main-loop state, updated by service().
+    [[nodiscard]] bool link_up() const { return autoneg_.link().has_value(); }
 
     // Running count of frames dropped because the receive buffer pool was exhausted
     // (the drain fell behind line rate). A visible, counted drop, not a silent loss.
@@ -127,7 +136,7 @@ class Phy {
 
     // Running count of wire activity: every transmit attempt, collided ones
     // included, and every capture that decoded data, whether it was queued or
-    // dropped on pool overflow. Link pulses either way are not activity. Wraps.
+    // dropped. Link pulses either way are not activity. Wraps.
     [[nodiscard]] std::uint32_t wire_activity() const {
         return tx_attempts_ + rx_captures_.load(std::memory_order_relaxed);
     }
@@ -138,6 +147,8 @@ class Phy {
     void configure_carrier_qualify();
     void rearm_capture(std::size_t slot);
     void on_rx_eof();
+    void discard_capture();
+    void on_link_pulse();
     void on_carrier_assert();
     void on_carrier_qualified();
     static void carrier_qualified_irq_handler();
@@ -151,8 +162,10 @@ class Phy {
     void on_tx_complete();
     static void tx_dma_irq_handler();
     void force_idle();
+    void emit_pulse();
     [[nodiscard]] bool emit_nlp();
-    static std::int64_t nlp_alarm_cb(alarm_id_t id, void* user);
+    [[nodiscard]] std::uint32_t emit_link_pulses();
+    static std::int64_t link_pulse_alarm_cb(alarm_id_t id, void* user);
     void advance_link(std::uint32_t now_us);
     void resolve_attempt();
     void release_frame();
@@ -171,8 +184,24 @@ class Phy {
     int dma_tx_{-1};
     int dma_rx_{-1};
 
+    // The link pulse alarm's own state.
     NlpScheduler nlp_{};
-    alarm_id_t nlp_alarm_{-1};
+    std::optional<FlpBurst> flp_burst_{};
+    alarm_id_t link_pulse_alarm_{-1};
+
+    // What the alarm sends, mirrored from autoneg_ by the loop, and how many FLP
+    // bursts it has completed, counted in the alarm and consumed by the loop.
+    std::atomic<Autoneg::LinkPulses> link_pulses_{Autoneg::LinkPulses::None};
+    std::atomic<std::uint16_t> code_word_{ADVERTISED_LCW};
+    std::atomic<std::uint32_t> flp_bursts_sent_{0};
+    std::uint32_t flp_bursts_seen_{0};
+
+    // The resolved duplex, written by the loop only as the link comes up.
+    std::atomic<Duplex> duplex_{Duplex::Half};
+
+    // Whether received frames are delivered, mirrored from link_up() by the loop for
+    // the end-of-frame interrupt.
+    std::atomic<bool> link_up_mirror_{false};
 
     // TX queue: host frames are built in place here and clocked out one at a time.
     // Both indices belong to the main loop -- commit_tx() fills at tx_head_ and
@@ -210,13 +239,21 @@ class Phy {
     std::atomic<std::uint32_t> collision_elapsed_us_{0};
     std::atomic<std::uint32_t> tx_start_us_{0};
 
-    // Every carrier assert counts as link activity, whether it carried a frame or
-    // only a link pulse. Counted in the carrier interrupt, consumed by the loop.
-    std::atomic<std::uint32_t> carrier_events_{0};
-    std::uint32_t carrier_events_seen_{0};
+    // Carrier blips that decoded no data are link pulses, timed from their rising
+    // edge and decoded in the carrier interrupt.
+    std::uint32_t carrier_asserted_us_{0};
+    LinkPulseDecoder pulse_decoder_{};
+
+    // Decoded link pulses, handed from the carrier interrupt to the loop: a count of
+    // valid NLPs, and the latest code word packed with its sequence number.
+    std::atomic<std::uint32_t> valid_nlps_{0};
+    std::uint32_t valid_nlps_seen_{0};
+    std::atomic<std::uint32_t> code_word_slot_{0};
+    std::uint32_t code_word_sequence_seen_{0};
 
     CsmaCd csma_;
     LinkState link_{};
+    Autoneg autoneg_;
     CsmaStats csma_stats_{};
 
     // The 32-bit jam that tells the peer the frame it is hearing is a collision. It
@@ -241,8 +278,10 @@ class Phy {
     std::array<std::array<std::uint32_t, RX_WORD_CAPACITY>, RX_POOL_SIZE> rx_pool_{};
     RxSlotRing<RX_POOL_SIZE> rx_ring_{};
 
-    // Written only in on_rx_eof() (end-of-frame interrupt).
+    // Written only in on_rx_eof() (end-of-frame interrupt), and consumed by the loop
+    // as received frames for the link integrity test.
     std::atomic<std::uint32_t> rx_captures_{0};
+    std::uint32_t rx_captures_seen_{0};
 
     // The drain unpacks the packed capture words straight into rx_frame_ as the
     // byte-aligned destination..FCS frame in a single pass. Main-loop-owned.

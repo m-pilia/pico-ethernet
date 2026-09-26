@@ -17,12 +17,12 @@ constexpr std::uint32_t START_US{1'000'000};
 // A peer link pulse arrives every 16 +/- 8 ms, comfortably inside the window.
 constexpr std::uint32_t PULSE_SPACING_US{16'000};
 
-// Feeds `count` link-activity events spaced a pulse apart and returns the timestamp
-// of the last one.
+// Feeds `count` valid link pulses spaced a pulse apart and returns the timestamp of
+// the last one.
 std::uint32_t pulse_train(LinkState& link, std::uint32_t from_us, std::uint32_t count) {
     std::uint32_t now_us{from_us};
     for (std::uint32_t i{0}; i < count; ++i) {
-        link.on_activity(now_us);
+        link.on_pulse(now_us);
         now_us += PULSE_SPACING_US;
     }
     return now_us - PULSE_SPACING_US;
@@ -50,7 +50,7 @@ TEST(LinkState, AGapBeforeTheThresholdRestartsTheCount) {
     const std::uint32_t last_us{pulse_train(link, START_US, LINK_UP_EVENTS - 1)};
 
     const std::uint32_t after_gap_us{last_us + LINK_LOSS_US + 1};
-    link.on_activity(after_gap_us);
+    link.on_pulse(after_gap_us);
     EXPECT_FALSE(link.up());
 
     pulse_train(link, after_gap_us + PULSE_SPACING_US, LINK_UP_EVENTS - 1);
@@ -88,6 +88,47 @@ TEST(LinkState, ComesBackUpAfterADrop) {
     ASSERT_FALSE(link.up());
 
     pulse_train(link, last_us + 2 * LINK_LOSS_US, LINK_UP_EVENTS);
+    EXPECT_TRUE(link.up());
+}
+
+TEST(LinkState, AFrameRestoresAFailedLinkAtOnce) {
+    LinkState link{};
+    link.on_frame(START_US);
+    EXPECT_TRUE(link.up());
+}
+
+TEST(LinkState, FramesKeepAnUpLinkAliveWithoutPulses) {
+    LinkState link{};
+    std::uint32_t last_us{pulse_train(link, START_US, LINK_UP_EVENTS)};
+    ASSERT_TRUE(link.up());
+
+    for (std::uint32_t i{0}; i < 10; ++i) {
+        last_us += LINK_LOSS_US;
+        link.advance(last_us);
+        link.on_frame(last_us);
+        ASSERT_TRUE(link.up()) << "frame " << i;
+    }
+}
+
+TEST(LinkState, DropsOnceTheLossWindowPassesAfterTheLastFrame) {
+    LinkState link{};
+    link.on_frame(START_US);
+    link.advance(START_US + LINK_LOSS_US);
+    EXPECT_TRUE(link.up());
+
+    link.advance(START_US + LINK_LOSS_US + 1);
+    EXPECT_FALSE(link.up());
+}
+
+TEST(LinkState, PulsesAfterAFrameDroppedStillNeedTheFullCount) {
+    LinkState link{};
+    link.on_frame(START_US);
+    link.advance(START_US + LINK_LOSS_US + 1);
+    ASSERT_FALSE(link.up());
+
+    const std::uint32_t last_us{pulse_train(link, START_US + 2 * LINK_LOSS_US, LINK_UP_EVENTS - 1)};
+    EXPECT_FALSE(link.up());
+    pulse_train(link, last_us + PULSE_SPACING_US, 1);
     EXPECT_TRUE(link.up());
 }
 

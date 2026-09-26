@@ -7,6 +7,7 @@
 
 #include <cstdint>
 
+#include "src/phy/duplex.h"
 #include "src/phy/phy_timing.h"
 
 namespace pico_ethernet {
@@ -189,6 +190,38 @@ TEST(CsmaCd, DeferralAndBackoffSurviveATimestampWrap) {
 
     ASSERT_EQ(csma.on_collision(EARLY_COLLISION_US), CsmaCd::Collision::Backoff);
     EXPECT_LE(wait_after_free(csma, BEFORE_WRAP), SLOT_TIME_US);
+}
+
+TEST(CsmaCd, FullDuplexTransmitsOverACarrier) {
+    CsmaCd csma{SEED};
+    csma.set_duplex(Duplex::Full);
+    csma.observe_medium(true, MEDIUM_FREE_US);
+    EXPECT_TRUE(csma.may_transmit(MEDIUM_FREE_US + IFG_US));
+}
+
+TEST(CsmaCd, FullDuplexStillKeepsTheInterframeGap) {
+    CsmaCd csma{SEED};
+    csma.set_duplex(Duplex::Full);
+    csma.observe_medium(false, MEDIUM_FREE_US);
+    EXPECT_FALSE(csma.may_transmit(MEDIUM_FREE_US + IFG_US - 1));
+    EXPECT_TRUE(csma.may_transmit(MEDIUM_FREE_US + IFG_US));
+}
+
+TEST(CsmaCd, FullDuplexNeverRecordsADeferral) {
+    CsmaCd csma{SEED};
+    csma.set_duplex(Duplex::Full);
+    csma.observe_medium(true, MEDIUM_FREE_US);
+    ASSERT_FALSE(csma.may_transmit(MEDIUM_FREE_US));
+    csma.on_held_back(MEDIUM_FREE_US);
+    EXPECT_FALSE(csma.deferred());
+}
+
+TEST(CsmaCd, BackToHalfDuplexSensesTheCarrierAgain) {
+    CsmaCd csma{SEED};
+    csma.set_duplex(Duplex::Full);
+    csma.set_duplex(Duplex::Half);
+    csma.observe_medium(true, MEDIUM_FREE_US);
+    EXPECT_FALSE(csma.may_transmit(MEDIUM_FREE_US + IFG_US));
 }
 
 TEST(CollisionOffset, IsMeasuredFromTheAssertNotFromTheQualification) {

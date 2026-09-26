@@ -14,11 +14,14 @@ PC, joined by the copper link through the Pico's PHY. This tool drives crafted
 Ethernet frames between them to check two things under a controllable, line-legal
 load: that frames are not lost, and that their content is intact.
 
-Because 10BASE-T half-duplex is a shared medium, --load is the *aggregate* offered
-load on the one 10 Mbit/s budget; with --direction both it is split across the two
-directions (--tx-share). The receiver reports kernel capture drops (PACKET_STATISTICS)
-separately from wire loss, so a userspace-generator shortfall is visible rather than
-mistaken for the PHY dropping frames.
+The peer either autonegotiates, advertising 10BASE-T half and full duplex, or is
+forced to 10BASE-T half duplex (--peer-mode), and the load follows the duplex the
+link resolves to. A half-duplex medium is shared, so there --load is the *aggregate*
+offered load on the one 10 Mbit/s budget, and with --direction both it is split
+across the two directions (--tx-share). In full duplex each direction has its own
+10 Mbit/s, and --load is offered in each. The receiver reports kernel capture drops
+(PACKET_STATISTICS) separately from wire loss, so a userspace-generator shortfall is
+visible rather than mistaken for the PHY dropping frames.
 """
 
 import argparse
@@ -37,6 +40,7 @@ import zlib
 from wire_counters import (
     DEVICE_COUNTERS,
     PEER_LINK_COUNTERS,
+    PEER_MODES,
     PICO_LINK_COUNTERS,
     CounterProbe,
     capture_link,
@@ -45,8 +49,11 @@ from wire_counters import (
     read_ethtool_stats,
     read_link_counters,
     restore_link,
+    set_peer_mode,
     sudo,
+    wait_for_carrier,
     wait_for_iface,
+    wait_for_link_duplex,
 )
 
 ETHERTYPE = 0x88B5
@@ -325,7 +332,7 @@ def capture_admin_up(iface):
 
 def capture_state(peer, pico):
     """Snapshot the settings this tool will change, so teardown can restore them.
-    The peer's link mode is managed (forced 10baseT/Half); the Pico's is not."""
+    The peer's link mode is managed (set by --peer-mode); the Pico's is not."""
     return {
         "peer": {"iface": peer, "manage_link": True, "link": capture_link(peer),
                  "offloads": capture_offloads(peer), "up": capture_admin_up(peer)},
@@ -342,20 +349,12 @@ def restore_state(s):
     sudo(["ip", "link", "set", s["iface"], "up" if s["up"] else "down"], capture_output=True)
 
 
-def setup_environment(peer, pico):
+def setup_environment(peer, pico, peer_mode):
     sudo(["ip", "netns", "add", NETNS], check=True)
     sudo(["ip", "link", "set", peer, "netns", NETNS], check=True)
     sudo(["ip", "netns", "exec", NETNS, "ip", "link", "set", peer, "up"], check=True)
 
-    forced = sudo(
-        ["ip", "netns", "exec", NETNS, "ethtool", "-s", peer,
-         "speed", "10", "duplex", "half", "autoneg", "off"],
-        capture_output=True, text=True,
-    )
-    if forced.returncode != 0:
-        print(f"warning: could not force {peer} to 10baseT/Half "
-              f"({forced.stderr.strip()}); line legality is not hardware-enforced",
-              file=sys.stderr)
+    set_peer_mode(peer, peer_mode, netns=NETNS).check_returncode()
 
     sudo(["ip", "link", "set", pico, "up"], check=True)
     for prefix in (["ip", "netns", "exec", NETNS], []):
@@ -439,14 +438,16 @@ def worker_argv(spec, size, stream_loads, duration, live):
     return argv
 
 
-def direction_loads(direction, load, tx_share):
-    """Split the aggregate offered load across the active directions. The half-duplex
-    medium is shared, so bidirectional traffic draws from one budget."""
+def direction_loads(direction, load, tx_share, duplex):
+    """The offered load of each active direction. The half-duplex medium is shared, so
+    bidirectional traffic splits one budget; in full duplex each direction has its
+    own."""
+    shared = direction == "both" and duplex == "half"
     loads = {}
     if direction in ("rx", "both"):
-        loads[STREAM_PEER_TO_PICO] = load * (1 - tx_share) if direction == "both" else load
+        loads[STREAM_PEER_TO_PICO] = load * (1 - tx_share) if shared else load
     if direction in ("tx", "both"):
-        loads[STREAM_PICO_TO_PEER] = load * tx_share if direction == "both" else load
+        loads[STREAM_PICO_TO_PEER] = load * tx_share if shared else load
     return loads
 
 
@@ -544,14 +545,19 @@ def run_main(argv):
     p.add_argument("--pico-mac", default=PICO_MAC_DEFAULT)
     p.add_argument("--direction", choices=("rx", "tx", "both"), default="rx",
                    help="rx=peer->Pico, tx=Pico->peer, both=simultaneous")
+    p.add_argument("--peer-mode", choices=PEER_MODES, default="autoneg",
+                   help="autoneg: the peer advertises 10BASE-T half and full duplex; "
+                        "half: the peer is forced to 10BASE-T half duplex "
+                        "(default %(default)s)")
     p.add_argument("--size", default="max",
                    help="min|max|imix|random|<bytes> (payload length; default %(default)s)")
     p.add_argument("--load", type=float, default=90.0,
-                   help="aggregate offered load as percent of the shared 10 Mbit/s "
-                   "half-duplex medium (split across directions when both; default: %(default).2f)")
+                   help="offered load as percent of 10 Mbit/s: in half duplex the aggregate "
+                        "on the shared medium (split across directions when both), in full "
+                        "duplex the load of each direction (default: %(default).2f)")
     p.add_argument("--tx-share", type=float, default=0.5,
                    help="fraction of the aggregate budget given to Pico->peer when "
-                        "--direction both (default %(default).2f)")
+                        "--direction both in half duplex (default %(default).2f)")
     p.add_argument("--duration", type=float, default=10.0,
                    help="seconds per run/step (ignored with --live)")
     p.add_argument("--sweep", nargs="?", const="10,25,50,75,90,100", default=None,
@@ -617,14 +623,22 @@ def run_main(argv):
         sudo(["ip", "netns", "del", NETNS], capture_output=True)
         wait_for_iface(args.peer_interface)
         saved = capture_state(args.peer_interface, args.pico_interface)
-        setup_environment(args.peer_interface, args.pico_interface)
+        setup_environment(args.peer_interface, args.pico_interface, args.peer_mode)
         if not wait_for_iface(args.pico_interface):
             print(f"error: {args.pico_interface} not present", file=sys.stderr)
+            return 1
+        duplex = wait_for_link_duplex(args.peer_interface, netns=NETNS)
+        if duplex is None:
+            print(f"error: {args.peer_interface} has no link", file=sys.stderr)
+            return 1
+        if not wait_for_carrier(args.pico_interface):
+            print(f"error: {args.pico_interface} has no carrier", file=sys.stderr)
             return 1
         for probe in probes:
             probe.snapshot_baseline()
         peer_mac = read_peer_mac(args.peer_interface)
-        print(f"peer MAC {peer_mac}  ->  Pico MAC {args.pico_mac}   direction={args.direction}")
+        print(f"peer MAC {peer_mac}  ->  Pico MAC {args.pico_mac}   direction={args.direction}   "
+              f"link 10/{duplex.capitalize()}")
 
         peer_spec, pico_spec = plan_workers(
             args.direction, args.peer_interface, args.pico_interface,
@@ -634,8 +648,9 @@ def run_main(argv):
 
         loads = [float(x) for x in args.sweep.split(",")] if args.sweep else [args.load]
         for load in loads:
-            stream_loads = direction_loads(args.direction, load, args.tx_share)
-            label = "live" if args.live else f"{load:g}% aggregate, {args.duration:g}s"
+            stream_loads = direction_loads(args.direction, load, args.tx_share, duplex)
+            share = "aggregate" if duplex == "half" else "per direction"
+            label = "live" if args.live else f"{load:g}% {share}, {args.duration:g}s"
             print(f"\n=== load: {label} ===")
             if args.live:
                 print("(running until Ctrl-C; failures print below)")

@@ -5,8 +5,10 @@
 #define PHY_CSMA_CD_H
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 
+#include "src/phy/duplex.h"
 #include "src/phy/phy_timing.h"
 #include "src/util/random.h"
 
@@ -21,8 +23,9 @@ namespace pico_ethernet {
     return since_start_us > CARRIER_QUALIFY_US ? since_start_us - CARRIER_QUALIFY_US : 0;
 }
 
-// Half-duplex CSMA/CD transmit policy (IEEE 802.3 Clause 4): when a queued frame
-// may go onto the medium, and what a collision does to it.
+// Transmit policy (IEEE 802.3 Clause 4): when a queued frame may go onto the medium,
+// and what a collision does to it. Half duplex is CSMA/CD; full duplex has no shared
+// medium to sense or collide on, so only the interframe gap is left to keep.
 //
 // Pure and clock-free -- every timestamp arrives as an argument, so the hardware
 // timer, the carrier-detect pin and the transmitter all stay with the caller and
@@ -40,6 +43,8 @@ class CsmaCd {
     explicit constexpr CsmaCd(std::uint32_t seed)
         : rng_{seed} {}
 
+    constexpr void set_duplex(Duplex duplex) { duplex_ = duplex; }
+
     // `busy` is the carrier-detect level now; `free_since_us` is when the medium
     // last became free, which is where the interframe gap is measured from.
     constexpr void observe_medium(bool busy, std::uint32_t free_since_us) {
@@ -48,18 +53,22 @@ class CsmaCd {
     }
 
     // Whether the pending frame may start now: the medium has been free for the
-    // interframe gap, and any backoff has run out.
+    // interframe gap, and any backoff has run out. In full duplex the gap runs from
+    // the peer's frames too, which can only hold a frame back for longer than needed.
     [[nodiscard]] constexpr bool may_transmit(std::uint32_t now_us) const {
         return medium_idle(now_us) && now_us - backoff_from_us_ >= backoff_us_;
     }
 
     // Records that the pending frame was held back at `now_us`. Only waiting on the
     // medium before the first attempt is a deferral; waiting out a backoff is not.
-    constexpr void on_held_back(std::uint32_t now_us) { deferred_ |= collisions_ == 0 && !medium_idle(now_us); }
+    constexpr void on_held_back(std::uint32_t now_us) {
+        deferred_ |= duplex_ == Duplex::Half && collisions_ == 0 && !medium_idle(now_us);
+    }
 
     // `elapsed_us` is how long the aborted frame had been transmitting, which places
     // the collision inside or beyond the slot time.
     [[nodiscard]] constexpr Collision on_collision(std::uint32_t elapsed_us) {
+        assert(duplex_ == Duplex::Half);
         ++collisions_;
         if (elapsed_us >= SLOT_TIME_US) {
             return Collision::Late;
@@ -89,10 +98,11 @@ class CsmaCd {
 
   private:
     [[nodiscard]] constexpr bool medium_idle(std::uint32_t now_us) const {
-        return !busy_ && now_us - free_since_us_ >= IFG_US;
+        return (duplex_ == Duplex::Full || !busy_) && now_us - free_since_us_ >= IFG_US;
     }
 
     Lcg rng_;
+    Duplex duplex_{Duplex::Half};
     std::uint32_t free_since_us_{0};
     std::uint32_t backoff_from_us_{0};
     std::uint32_t backoff_us_{0};

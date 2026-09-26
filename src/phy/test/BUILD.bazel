@@ -65,6 +65,7 @@ cc_test(
         "@googletest//:gtest",
         "@googletest//:gtest_main",
         "//src/phy:csma_cd",
+        "//src/phy:duplex",
         "//src/phy:phy_timing",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
@@ -77,6 +78,20 @@ cc_test(
         "@googletest//:gtest",
         "@googletest//:gtest_main",
         "//src/phy:link_state",
+        "//src/phy:phy_timing",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)
+
+cc_test(
+    name = "autoneg_test",
+    srcs = ["autoneg_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        ":peer_code_words",
+        "//src/phy:autoneg",
+        "//src/phy:duplex",
         "//src/phy:phy_timing",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
@@ -112,6 +127,29 @@ cc_library(
         ":pin_capture_pio",
         "@pico-sdk//src/rp2_common/hardware_dma",
         "@pico-sdk//src/rp2_common/hardware_pio",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
+)
+
+cc_library(
+    name = "peer_code_words",
+    testonly = True,
+    hdrs = ["peer_code_words.h"],
+    deps = ["//src/phy:autoneg"],
+)
+
+cc_library(
+    name = "phy_harness",
+    testonly = True,
+    hdrs = ["phy_harness.h"],
+    deps = [
+        "//src/mac:ethernet_frame",
+        "//src/phy:phy",
+        "//src/phy:link_pulse",
+        "//src/phy:phy_timing",
+        "@pico-sdk//src/rp2_common/hardware_gpio",
+        "@pico-sdk//src/rp2_common/hardware_sync",
+        "@pico-sdk//src/rp2_common/pico_stdlib",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
 )
@@ -182,6 +220,7 @@ cc_binary(
     linkopts = ["-Wl,--gc-sections"],
     target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
     deps = [
+        ":phy_harness",
         ":pin_capture",
         ":symbol_trace",
         "//src/mac:ethernet_frame",
@@ -192,9 +231,31 @@ cc_binary(
         "//src/phy:tx_level",
         "//src/util:led_heartbeat",
         "@pico-sdk//src/rp2_common/hardware_clocks",
+        "@pico-sdk//src/rp2_common/hardware_pio",
+        "@pico-sdk//src/rp2_common/pico_stdlib",
+    ],
+)
+
+cc_binary(
+    name = "autoneg_selftest",
+    testonly = True,
+    srcs = ["autoneg_selftest.cpp"],
+    linkopts = ["-Wl,--gc-sections"],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
+    deps = [
+        ":peer_code_words",
+        ":phy_harness",
+        ":pin_capture",
+        "//src/mac:ethernet_frame",
+        "//src/phy:autoneg",
+        "//src/phy:phy",
+        "//src/phy:phy_stats",
+        "//src/phy:phy_timing",
+        "//src/phy:tx_level",
+        "//src/util:led_heartbeat",
+        "@pico-sdk//src/rp2_common/hardware_clocks",
         "@pico-sdk//src/rp2_common/hardware_gpio",
         "@pico-sdk//src/rp2_common/hardware_pio",
-        "@pico-sdk//src/rp2_common/hardware_sync",
         "@pico-sdk//src/rp2_common/pico_stdlib",
     ],
 )

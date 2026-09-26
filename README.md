@@ -7,7 +7,7 @@ device](https://en.wikipedia.org/wiki/Ethernet_over_USB).
 # Goals
 
 * Compliant 10BASE-T Ethernet NIC, highest possible 10BASE-T speed over a USB
-  1.1 link. Support for full-duplex and CSMA/CD.
+  1.1 link. Support for full-duplex and half-duplex with CSMA/CD.
 * Own design and implementation of the PHY, no external hardware or software
   solution.
 * Efficient implementation with minimal resources. Core 1 is completely unused,
@@ -61,7 +61,30 @@ over a UART console (e.g. via `minicom -D /dev/ttyACM0 -b 115200`):
 bazelisk build --config=rp2350 //src/phy/test:rx_pio_selftest
 bazelisk build --config=rp2350 //src/phy/test:tx_pio_selftest
 bazelisk build --config=rp2350 //src/phy/test:csma_cd_selftest
+bazelisk build --config=rp2350 //src/phy/test:autoneg_selftest
 ```
+
+## Peer testing
+
+Two tools are provided to test against a peer interface (on the same
+development host).
+
+`peer_flood_test.py` is the simpler one. It allows to produce a flood of frames
+(using [Mausezahn](https://en.wikipedia.org/wiki/Mausezahn), which needs to be
+installed and available in the `$PATH`).
+
+```bash
+uv run tools/peer_flood_test.py --help
+```
+
+`wire_test.py` allows to send traffic between peers, and verifies that frames
+are correctly received.
+
+```bash
+uv run tools/wire_test.ph --help
+```
+
+Both tools allow to optionally show counters on host or device.
 
 ## Reading device statistics
 

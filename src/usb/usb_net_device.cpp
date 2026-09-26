@@ -198,8 +198,16 @@ void UsbNetDevice::publish_link_state(bool up) {
     }
     link_up_ = up;
     link_state_published_ = true;
-    UsbInterruptLock lock;
-    tud_network_link_state(USB_RHPORT, up);
+    {
+        UsbInterruptLock lock;
+        tud_network_link_state(USB_RHPORT, up);
+    }
+    // The notification is only queued for tud_task_ext(), which runs in the USB
+    // interrupt. With no carrier the host polls nothing that raises one, so a
+    // link-up would wait for unrelated bus activity; pend the interrupt instead.
+    // Only once the lock is released: re-enabling an interrupt clears its pending
+    // bit.
+    irq_set_pending(USBCTRL_IRQ);
 }
 
 bool UsbNetDevice::on_frame_received(std::span<const std::uint8_t> host_frame) {

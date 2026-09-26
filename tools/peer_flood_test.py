@@ -4,12 +4,15 @@
 # dependencies = []
 # ///
 
-"""Flood the Pico and the peer with broadcast frames at the same time, so both
-stations contend for the medium, and report how both sides fared.
+"""Flood the Pico and the peer with broadcast frames at the same time, and report
+how both sides fared.
 
-Runs until Ctrl-C, or for --duration seconds. Either way the Pico's device counters
-and both hosts' kernel and driver counters are printed as deltas over the run, and
-the peer's link mode is put back to what it was.
+The peer either autonegotiates, advertising 10BASE-T half and full duplex, or is
+forced to 10BASE-T half duplex (--peer-mode). In half duplex both stations contend
+for the medium; in full duplex the floods run independently. Runs until Ctrl-C, or
+for --duration seconds. Either way the Pico's device
+counters and both hosts' kernel and driver counters are printed as deltas over the
+run, and the peer's link mode is put back to what it was.
 """
 
 import argparse
@@ -23,6 +26,7 @@ import time
 from wire_counters import (
     DEVICE_COUNTERS,
     PEER_LINK_COUNTERS,
+    PEER_MODES,
     PICO_LINK_COUNTERS,
     CounterProbe,
     capture_link,
@@ -31,11 +35,12 @@ from wire_counters import (
     read_ethtool_stats,
     read_link_counters,
     restore_link,
+    set_peer_mode,
     sudo,
+    wait_for_carrier,
     wait_for_iface,
+    wait_for_link_duplex,
 )
-
-DUPLEX = {"half-duplex": "half", "full-duplex": "full"}
 
 
 def start_flood(iface, delay, mac):
@@ -79,6 +84,9 @@ def flood_and_report(args):
     if not wait_for_iface(args.target_interface):
         print(f"error: {args.target_interface} did not reappear after counter read",
               file=sys.stderr)
+        return 1
+    if not wait_for_carrier(args.target_interface):
+        print(f"error: {args.target_interface} has no carrier", file=sys.stderr)
         return 1
 
     pico = args.target_interface
@@ -124,8 +132,10 @@ def main():
     parser.add_argument("--mac", default="ffff.ffff.ffff")
     parser.add_argument("--target-delay", default="200us")
     parser.add_argument("--peer-delay", default="200us")
-    parser.add_argument("--mode", choices=DUPLEX, default="half-duplex",
-                        help="duplex the peer is forced to at 10 Mbit/s (default %(default)s)")
+    parser.add_argument("--peer-mode", choices=PEER_MODES, default="autoneg",
+                        help="autoneg: the peer advertises 10BASE-T half and full duplex; "
+                             "half: the peer is forced to 10BASE-T half duplex "
+                             "(default %(default)s)")
     parser.add_argument("--duration", type=float, default=None,
                         help="seconds to flood for (default: until Ctrl-C)")
     args = parser.parse_args()
@@ -140,9 +150,13 @@ def main():
     sudo(["-v"], check=True)
 
     saved_link = capture_link(args.peer_interface)
-    sudo(["ethtool", "-s", args.peer_interface,
-          "speed", "10", "duplex", DUPLEX[args.mode], "autoneg", "off"], check=True)
+    set_peer_mode(args.peer_interface, args.peer_mode).check_returncode()
     try:
+        duplex = wait_for_link_duplex(args.peer_interface)
+        if duplex is None:
+            print(f"error: {args.peer_interface} has no link", file=sys.stderr)
+            return 1
+        print(f"link 10/{duplex.capitalize()}")
         return flood_and_report(args)
     finally:
         restore_link(args.peer_interface, saved_link)

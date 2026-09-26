@@ -55,6 +55,22 @@ cc_library(
 )
 
 cc_library(
+    name = "duplex",
+    hdrs = ["duplex.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "autoneg",
+    hdrs = ["autoneg.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":duplex",
+        ":phy_timing",
+    ],
+)
+
+cc_library(
     name = "link_state",
     hdrs = ["link_state.h"],
     visibility = ["//visibility:public"],
@@ -66,6 +82,7 @@ cc_library(
     hdrs = ["csma_cd.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":duplex",
         ":phy_timing",
         "//src/util:random",
     ],
@@ -94,8 +111,10 @@ cc_library(
     hdrs = ["phy.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":autoneg",
         ":carrier_qualify_pio",
         ":csma_cd",
+        ":duplex",
         ":link_pulse",
         ":link_state",
         ":phy_stats",

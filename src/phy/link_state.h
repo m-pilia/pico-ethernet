@@ -10,17 +10,17 @@
 
 namespace pico_ethernet {
 
-// 10BASE-T link integrity test (IEEE 802.3 Clause 14.2.1.7): the link is declared
-// up only after LINK_UP_EVENTS consecutive pieces of link activity -- link pulses or
-// frames -- spaced no further apart than the link-loss window, and drops again once
-// the window passes with the line silent.
+// 10BASE-T link integrity test (IEEE 802.3 Clause 14.2.1.7): the link passes after
+// LINK_UP_EVENTS consecutive valid link pulses spaced no further apart than the
+// link-loss window, or at once on a received frame, and fails again once the window
+// passes with neither.
 //
-// Pure: activity is reported by the caller as it is observed, and the loss timer is
-// driven by advance(). Timestamps are microseconds from a free-running 32-bit
-// counter, compared as unsigned differences so a counter wrap is transparent.
+// Pure: pulses and frames are reported by the caller as they are observed, and the
+// loss timer is driven by advance(). Timestamps are microseconds from a free-running
+// 32-bit counter, compared as unsigned differences so a counter wrap is transparent.
 class LinkState {
   public:
-    constexpr void on_activity(std::uint32_t now_us) {
+    constexpr void on_pulse(std::uint32_t now_us) {
         if (silent_for(now_us)) {
             events_ = 0;
         }
@@ -29,6 +29,12 @@ class LinkState {
             ++events_;
         }
         up_ = events_ == LINK_UP_EVENTS;
+    }
+
+    constexpr void on_frame(std::uint32_t now_us) {
+        last_activity_us_ = now_us;
+        events_ = LINK_UP_EVENTS;
+        up_ = true;
     }
 
     constexpr void advance(std::uint32_t now_us) {

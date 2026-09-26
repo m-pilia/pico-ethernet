@@ -37,11 +37,18 @@ Phy* s_irq_phy{nullptr};
 // The qualification loop in carrier_qualify.pio samples RXC once per iteration and
 // runs its loaded count plus one times.
 constexpr std::uint32_t QUALIFY_CYCLES_PER_ITERATION{2};
-constexpr std::uint32_t QUALIFY_LOOP_COUNT{
-    CARRIER_QUALIFY_US * (SYS_CLOCK_HZ / 1'000'000) / QUALIFY_CYCLES_PER_ITERATION - 1};
+constexpr std::uint32_t QUALIFY_LOOP_COUNT{CARRIER_QUALIFY_US * SYS_CYCLES_PER_US / QUALIFY_CYCLES_PER_ITERATION - 1};
 
 // A colliding station always completes its preamble and SFD before it jams.
 static_assert(CARRIER_QUALIFY_US * 1000 < (PREAMBLE_SFD_LEN * 8 + JAM_BITS) * BIT_TIME_NS);
+
+// The latest received code word shares one atomic word with a flag for whether it
+// was consecutive and a sequence number, which tells the loop a new code word from
+// the last one it saw, and a skipped one -- overwritten before the loop got to it --
+// from the next.
+constexpr std::uint32_t CODE_WORD_CONSECUTIVE{1u << 16};
+constexpr std::uint32_t CODE_WORD_SEQUENCE_SHIFT{17};
+constexpr std::uint32_t CODE_WORD_SEQUENCE_MASK{(1u << (32 - CODE_WORD_SEQUENCE_SHIFT)) - 1};
 
 // RP2350-E5: a channel aborted while still enabled can re-trigger, so it is disabled
 // first. Whatever starts the channel again has to enable it again.
@@ -53,7 +60,8 @@ void __not_in_flash_func(abort_dma_channel)(uint channel) {
 
 Phy::Phy(std::uint32_t backoff_seed, const Pins& pins)
     : pins_{pins},
-      csma_{backoff_seed} {
+      csma_{backoff_seed},
+      autoneg_{time_us_32()} {
     // TXP/TXN must be adjacent so the TX SM can drive them as one 2-pin SET
     // group; RXD/RXC must be adjacent so the RX SM can gate on RXC via IN base + 1.
     assert(pins_.txn == pins_.txp + 1);
@@ -95,7 +103,7 @@ bool Phy::initialize() {
     force_idle();
     rearm_capture(rx_ring_.capture_slot());
 
-    // Both carrier edges matter: the rising edge is link activity; the falling edge
+    // Both carrier edges matter: the rising edge times a link pulse; the falling edge
     // is end of frame, and starts the interframe gap.
     s_irq_phy = this;
     gpio_set_irq_enabled_with_callback(
@@ -109,12 +117,13 @@ bool Phy::initialize() {
     irq_set_enabled(DMA_IRQ_0, true);
 
     // The qualifier runs all the time, but its flag only reaches the CPU while we
-    // transmit: start_tx() enables the source and on_tx_complete() disables it.
+    // transmit in half duplex: start_tx() enables the source and on_tx_complete()
+    // disables it.
     const auto qualify_irq{static_cast<uint>(pio_get_irq_num(pio_, 0))};
     irq_set_exclusive_handler(qualify_irq, &Phy::carrier_qualified_irq_handler);
     irq_set_enabled(qualify_irq, true);
 
-    nlp_alarm_ = add_alarm_in_ms(nlp_.next_interval_ms(), &Phy::nlp_alarm_cb, this, true);
+    link_pulse_alarm_ = add_alarm_in_ms(NLP_RETRY_MS, &Phy::link_pulse_alarm_cb, this, true);
     return true;
 }
 
@@ -199,11 +208,7 @@ void __not_in_flash_func(Phy::carrier_irq_handler)(uint gpio, std::uint32_t even
     }
 }
 
-void __not_in_flash_func(Phy::on_carrier_assert)() {
-    // Every carrier assert is evidence the peer is alive, whether it goes on to
-    // carry a frame or is just a link pulse.
-    carrier_events_.fetch_add(1, std::memory_order_relaxed);
-}
+void __not_in_flash_func(Phy::on_carrier_assert)() { carrier_asserted_us_ = time_us_32(); }
 
 void __not_in_flash_func(Phy::carrier_qualified_irq_handler)() {
     if (s_irq_phy != nullptr) {
@@ -259,11 +264,19 @@ void __not_in_flash_func(Phy::on_rx_eof)() {
     const std::uint32_t remaining_before{dma_channel_hw_addr(dma_rx_)->transfer_count};
     const std::size_t words_before{RX_WORD_CAPACITY - remaining_before};
 
-    // A carrier blip that decoded nothing -- a link pulse, or line noise -- is
-    // discarded; the capture keeps the same slot.
+    // A carrier blip that decoded nothing is a link pulse, or line noise the pulse
+    // decoder rejects.
     if (words_before == 0) {
-        abort_dma_channel(dma_rx_);
-        rearm_capture(rx_ring_.capture_slot());
+        on_link_pulse();
+        discard_capture();
+        return;
+    }
+
+    // A frame received while the link is down counts, and can restore the link, but
+    // is not delivered: it arrived under the link state the loop last published.
+    rx_captures_.store(rx_captures_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+    if (!link_up_mirror_.load(std::memory_order_relaxed)) {
+        discard_capture();
         return;
     }
 
@@ -293,8 +306,32 @@ void __not_in_flash_func(Phy::on_rx_eof)() {
 
     // Hand the DMA a free buffer for the next frame and queue this one for the
     // main-loop drain. No parsing or copying here -- that is the drain's job.
-    rx_captures_.store(rx_captures_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
     rearm_capture(rx_ring_.publish(words));
+}
+
+void __not_in_flash_func(Phy::discard_capture)() {
+    abort_dma_channel(dma_rx_);
+    rearm_capture(rx_ring_.capture_slot());
+}
+
+void __not_in_flash_func(Phy::on_link_pulse)() {
+    const LinkPulseEvent event{pulse_decoder_.on_pulse(carrier_asserted_us_)};
+    switch (event.kind) {
+        case LinkPulseEvent::Kind::None:
+            return;
+        case LinkPulseEvent::Kind::ValidNlp:
+            valid_nlps_.store(valid_nlps_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+            return;
+        case LinkPulseEvent::Kind::CodeWord: {
+            const std::uint32_t sequence{
+                (code_word_slot_.load(std::memory_order_relaxed) >> CODE_WORD_SEQUENCE_SHIFT) + 1};
+            code_word_slot_.store(
+                (sequence << CODE_WORD_SEQUENCE_SHIFT) | (event.consecutive ? CODE_WORD_CONSECUTIVE : 0u) |
+                    event.code_word,
+                std::memory_order_relaxed);
+            return;
+        }
+    }
 }
 
 Phy::RxFrame Phy::poll_rx() {
@@ -351,25 +388,30 @@ void __not_in_flash_func(Phy::start_tx)(const WireFrame& frame) {
     channel_config_set_dreq(&c, pio_get_dreq(pio_, sm_tx_, true));
     dma_channel_configure(dma_tx_, &c, &pio_->txf[sm_tx_], frame.bytes.data(), frame.length, false);
 
-    // A qualified carrier while we transmit is a peer talking over us, which is
-    // exactly the collision we must catch. Its interrupt takes active_ as its cue to
-    // abort and jam, so the flag is raised behind the caller's mask, together with
-    // the machine and the transfer it would be aborting -- a collision seen between
-    // them would re-point the transfer at the jam while the machine is still stopped,
-    // leaving octets in a FIFO that nothing will drain. The caller has just seen the
-    // carrier low, so a raised qualification flag belongs to a carrier that has
-    // already ended and is cleared; one qualifying under the mask is delivered when
-    // it lifts.
+    // In half duplex a qualified carrier while we transmit is a peer talking over
+    // us, which is exactly the collision we must catch. Its interrupt takes active_
+    // as its cue to abort and jam, so the flag is raised behind the caller's mask,
+    // together with the machine and the transfer it would be aborting -- a collision
+    // seen between them would re-point the transfer at the jam while the machine is
+    // still stopped, leaving octets in a FIFO that nothing will drain. The caller has
+    // just seen the carrier low, so a raised qualification flag belongs to a carrier
+    // that has already ended and is cleared; one qualifying under the mask is
+    // delivered when it lifts.
     //
     // The SM stalls on autopull until the first octet lands, which latches TXSTALL.
     // Clear it once that octet is delivered so a TXSTALL seen in on_tx_complete()
     // means a mid-frame FIFO underrun. The mask also keeps a long ISR from delaying
     // that clear past the end of the frame.
+    //
+    // In full duplex the peer's carrier is on the other pair and never a collision.
+    // The qualifier keeps running regardless; its interrupt is simply never enabled.
     ++tx_attempts_;
     tx_start_us_.store(time_us_32(), std::memory_order_relaxed);
     active_.store(true, std::memory_order_relaxed);
-    pio_interrupt_clear(pio_, sm_qualify_);
-    pio_set_irq0_source_enabled(pio_, qualify_interrupt_source(), true);
+    if (duplex_.load(std::memory_order_relaxed) == Duplex::Half) {
+        pio_interrupt_clear(pio_, sm_qualify_);
+        pio_set_irq0_source_enabled(pio_, qualify_interrupt_source(), true);
+    }
     pio_sm_set_enabled(pio_, sm_tx_, true);
     dma_channel_start(dma_tx_);
     while (dma_channel_hw_addr(dma_tx_)->transfer_count == frame.length) {
@@ -419,7 +461,7 @@ void __not_in_flash_func(Phy::advance_tx)() {
 
     // A link that is down has no medium to contend for, so queued frames go nowhere:
     // discard them one per lap, the same place a frame would otherwise be started.
-    if (!link_.up()) {
+    if (!link_up()) {
         ++csma_stats_.link_down_dropped;
         release_frame();
         return;
@@ -435,21 +477,51 @@ void __not_in_flash_func(Phy::advance_tx)() {
 }
 
 void Phy::advance_link(std::uint32_t now_us) {
-    const bool was_up{link_.up()};
+    const bool was_up{link_up()};
 
-    // More activity than it takes to declare the link up tells the FSM nothing new,
-    // so a burst collapses into that many events and the loop stays bounded.
-    const std::uint32_t events{carrier_events_.load(std::memory_order_relaxed)};
-    const std::uint32_t pending{events - carrier_events_seen_};
-    carrier_events_seen_ = events;
-    for (std::uint32_t i{0}; i < pending && i < LINK_UP_EVENTS; ++i) {
-        link_.on_activity(now_us);
+    // More pulses than it takes to pass the link integrity test tell it nothing new,
+    // so a backlog collapses into that many and the loop stays bounded.
+    const std::uint32_t nlps{valid_nlps_.load(std::memory_order_relaxed)};
+    const std::uint32_t pending_nlps{nlps - valid_nlps_seen_};
+    valid_nlps_seen_ = nlps;
+    for (std::uint32_t i{0}; i < pending_nlps && i < LINK_UP_EVENTS; ++i) {
+        link_.on_pulse(now_us);
     }
-
+    const std::uint32_t captures{rx_captures_.load(std::memory_order_relaxed)};
+    if (captures != rx_captures_seen_) {
+        rx_captures_seen_ = captures;
+        link_.on_frame(now_us);
+    }
     link_.advance(now_us);
-    if (link_.up() != was_up) {
-        ++csma_stats_.link_transitions;
+
+    const std::uint32_t slot{code_word_slot_.load(std::memory_order_relaxed)};
+    const std::uint32_t sequence{slot >> CODE_WORD_SEQUENCE_SHIFT};
+    if (sequence != code_word_sequence_seen_) {
+        const bool next{sequence == ((code_word_sequence_seen_ + 1) & CODE_WORD_SEQUENCE_MASK)};
+        code_word_sequence_seen_ = sequence;
+        autoneg_.on_code_word(static_cast<std::uint16_t>(slot), next && (slot & CODE_WORD_CONSECUTIVE) != 0, now_us);
     }
+    const std::uint32_t bursts{flp_bursts_sent_.load(std::memory_order_relaxed)};
+    for (; flp_bursts_seen_ != bursts; ++flp_bursts_seen_) {
+        autoneg_.on_burst_sent(now_us);
+    }
+    autoneg_.advance(now_us, link_.up());
+
+    link_pulses_.store(autoneg_.link_pulses(), std::memory_order_relaxed);
+    code_word_.store(autoneg_.code_word(), std::memory_order_relaxed);
+
+    const std::optional<Duplex> link{autoneg_.link()};
+    if (link.has_value() != was_up) {
+        ++csma_stats_.link_transitions;
+        if (link) {
+            // The duplex only changes as the link comes up, when no attempt can be
+            // under way under the other duplex's rules.
+            assert(!attempt_in_flight_);
+            csma_.set_duplex(*link);
+            duplex_.store(*link, std::memory_order_relaxed);
+        }
+    }
+    link_up_mirror_.store(link.has_value(), std::memory_order_relaxed);
 }
 
 void __not_in_flash_func(Phy::resolve_attempt)() {
@@ -531,30 +603,64 @@ void __not_in_flash_func(Phy::force_idle)() {
     pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_IDLE));
 }
 
-bool Phy::emit_nlp() {
-    // A single ~100 ns positive excursion, and only onto a medium that is free: a
-    // pulse laid over a frame -- ours or the peer's -- corrupts it.
-    if (active_.load(std::memory_order_relaxed) || transmitting() || gpio_get(pins_.rxc)) {
+void __not_in_flash_func(Phy::emit_pulse)() {
+    // A single ~100 ns positive excursion.
+    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_POS));
+    busy_wait_at_least_cycles(PIO_CYCLES_PER_BIT);
+    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_IDLE));
+}
+
+bool __not_in_flash_func(Phy::emit_nlp)() {
+    // Only onto a medium that is free: a pulse laid over a frame corrupts it. That is
+    // our own frame, and in half duplex also the peer's. In full duplex the peer's
+    // frames are on the other pair, and holding back for them would starve our pulses
+    // under a one-way flood; its end of frame still restarts the gap, which delays a
+    // pulse by no more than the gap.
+    const bool peer_carrier{duplex_.load(std::memory_order_relaxed) == Duplex::Half && gpio_get(pins_.rxc)};
+    if (active_.load(std::memory_order_relaxed) || transmitting() || peer_carrier) {
         return false;
     }
     if (time_us_32() - medium_free_us_.load(std::memory_order_relaxed) < IFG_US) {
         return false;
     }
-
-    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_POS));
-    busy_wait_at_least_cycles(PIO_CYCLES_PER_BIT);
-    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_IDLE));
+    emit_pulse();
     note_medium_free();
     return true;
 }
 
-std::int64_t Phy::nlp_alarm_cb(alarm_id_t /*id*/, void* user) {
-    auto* self{static_cast<Phy*>(user)};
-    // A pulse held back for a busy medium is retried far sooner than the cadence, so
-    // traffic barely shifts the pulse train the peer's link timer is watching.
-    const std::uint32_t delay_ms{self->emit_nlp() ? self->nlp_.next_interval_ms() : NLP_RETRY_MS};
-    // Positive return = us from this scheduled fire.
-    return static_cast<std::int64_t>(delay_ms) * 1000;
+std::uint32_t __not_in_flash_func(Phy::emit_link_pulses)() {
+    // A burst under way runs to its end whatever the arbitration has moved on to, so
+    // the peer never sees a truncated one.
+    if (!flp_burst_) {
+        switch (link_pulses_.load(std::memory_order_relaxed)) {
+            case Autoneg::LinkPulses::None:
+                return NLP_RETRY_MS * 1000;
+            case Autoneg::LinkPulses::Nlp:
+                // A pulse held back for a busy medium is retried far sooner than the
+                // cadence, so traffic barely shifts the pulse train the peer's link
+                // timer is watching.
+                return (emit_nlp() ? nlp_.next_interval_ms() : NLP_RETRY_MS) * 1000;
+            case Autoneg::LinkPulses::Flp:
+                break;
+        }
+    }
+    FlpBurst& burst{flp_burst_ ? *flp_burst_ : flp_burst_.emplace(code_word_.load(std::memory_order_relaxed))};
+
+    // FLP pulses are never held back: they only go out while the link is down, when
+    // nothing is transmitted, and the peer's pulses are on the other pair.
+    emit_pulse();
+    if (const std::optional<std::uint32_t> next_us{burst.next_pulse_us()}) {
+        return *next_us;
+    }
+    flp_burst_.reset();
+    flp_bursts_sent_.store(flp_bursts_sent_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+    return FLP_BURST_PERIOD_US - FLP_BURST_US;
+}
+
+std::int64_t __not_in_flash_func(Phy::link_pulse_alarm_cb)(alarm_id_t /*id*/, void* user) {
+    // Positive return = us from this scheduled fire, so pulse spacing does not drift
+    // with the callback's own latency.
+    return static_cast<Phy*>(user)->emit_link_pulses();
 }
 
 } // namespace pico_ethernet

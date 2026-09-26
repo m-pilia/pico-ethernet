@@ -3,7 +3,7 @@
 
 """Bench helpers shared by the wire tools: snapshots of the Pico's device counters
 and of both hosts' kernel and driver counters around a traffic run, and the peer
-link mode a tool forces and has to put back."""
+link mode a tool sets and has to put back."""
 
 import json
 import os
@@ -87,22 +87,80 @@ def wait_for_iface(iface, timeout=15.0):
     return False
 
 
-def capture_link(iface):
-    out = sudo(["ethtool", iface], capture_output=True, text=True)
+def wait_for_carrier(iface, timeout=10.0):
+    """Whether the host sees carrier on `iface`, in the default namespace, within
+    `timeout`. The Pico's link can come up seconds after the peer's (parallel
+    detection), and until then the host drops what is sent through the Pico."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            with open(f"/sys/class/net/{iface}/carrier") as f:
+                if f.read().strip() == "1":
+                    return True
+        except OSError:
+            pass  # EINVAL while the interface is administratively down
+        time.sleep(0.1)
+    return False
+
+
+# `ethtool -s advertise` bits of the link modes a 10/100/1000BASE-T adapter lists.
+ADVERTISE_BITS = {
+    "10baseT/Half": 0x001,
+    "10baseT/Full": 0x002,
+    "100baseT/Half": 0x004,
+    "100baseT/Full": 0x008,
+    "1000baseT/Half": 0x010,
+    "1000baseT/Full": 0x020,
+}
+
+# How --peer-mode sets the peer's link: autonegotiation advertising 10BASE-T half and
+# full duplex only, or 10BASE-T half duplex forced with autonegotiation off.
+PEER_MODES = {
+    "autoneg": ["autoneg", "on", "advertise",
+                hex(ADVERTISE_BITS["10baseT/Half"] | ADVERTISE_BITS["10baseT/Full"])],
+    "half": ["speed", "10", "duplex", "half", "autoneg", "off"],
+}
+
+
+def read_link(iface, netns=None):
+    """What `ethtool <iface>` reports of the link: speed, duplex, autoneg, the
+    advertised modes as an `advertise` mask, and whether the link is detected."""
+    out = sudo([*netns_prefix(netns), "ethtool", iface], capture_output=True, text=True)
     if out.returncode != 0:
         return None
     info = {}
+    advertised = []
+    in_advertised = False
     for line in out.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("Speed:"):
-            digits = "".join(c for c in line.split(":", 1)[1] if c.isdigit())
+        name, sep, value = line.strip().partition(":")
+        if not sep:
+            # The advertised link modes list continues over several lines.
+            if in_advertised:
+                advertised += name.split()
+            continue
+        in_advertised = name == "Advertised link modes"
+        value = value.strip()
+        if in_advertised:
+            advertised += value.split()
+        elif name == "Speed":
+            digits = "".join(c for c in value if c.isdigit())
             if digits:
                 info["speed"] = digits
-        elif line.startswith("Duplex:"):
-            info["duplex"] = line.split(":", 1)[1].strip().lower()
-        elif line.startswith("Auto-negotiation:"):
-            info["autoneg"] = line.split(":", 1)[1].strip().lower()
-    return info if "autoneg" in info else None
+        elif name == "Duplex":
+            info["duplex"] = value.lower()
+        elif name == "Auto-negotiation":
+            info["autoneg"] = value.lower()
+        elif name == "Link detected":
+            info["detected"] = value == "yes"
+    mask = sum(ADVERTISE_BITS.get(mode, 0) for mode in advertised)
+    if mask:
+        info["advertise"] = hex(mask)
+    return info
+
+
+def capture_link(iface):
+    info = read_link(iface)
+    return info if info and "autoneg" in info else None
 
 
 def restore_link(iface, link):
@@ -110,9 +168,30 @@ def restore_link(iface, link):
     if link and link.get("autoneg") == "off" and "speed" in link and "duplex" in link:
         sudo(["ethtool", "-s", iface, "speed", link["speed"],
               "duplex", link["duplex"], "autoneg", "off"], capture_output=True)
+    elif link and "advertise" in link:
+        sudo(["ethtool", "-s", iface, "autoneg", "on", "advertise", link["advertise"]],
+             capture_output=True)
     else:
-        # Original was autoneg-on (or unreadable): undo the forced mode.
+        # Unreadable: at least undo a forced mode.
         sudo(["ethtool", "-s", iface, "autoneg", "on"], capture_output=True)
+
+
+def set_peer_mode(iface, mode, netns=None):
+    return sudo([*netns_prefix(netns), "ethtool", "-s", iface, *PEER_MODES[mode]],
+                capture_output=True, text=True)
+
+
+def wait_for_link_duplex(iface, netns=None, timeout=10.0):
+    """The duplex ("half" or "full") the link resolves to once it is up, or None if
+    it does not come up in time. Negotiation, or parallel detection on the Pico's
+    side, takes a few seconds."""
+    end = time.time() + timeout
+    while time.time() < end:
+        info = read_link(iface, netns)
+        if info and info.get("detected") and info.get("duplex") in ("half", "full"):
+            return info["duplex"]
+        time.sleep(0.3)
+    return None
 
 
 def read_device_counters():

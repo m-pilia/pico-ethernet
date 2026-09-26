@@ -41,7 +41,7 @@ jobs:
         run: bazelisk test --config=msan //...
 
       - name: Firmware build
-        run: bazelisk build --config=rp2350 //src:pico_ethernet_firmware
+        run: bazelisk build --config=rp2350 //src/...
 
       - name: Binary-size gate
         run: bazelisk build --config=rp2350 //tools/checks:binary_size_gate

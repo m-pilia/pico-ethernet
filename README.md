@@ -77,6 +77,28 @@ need for root):
 uv run tools/read_ethernet_stats.py
 ```
 
+## Debugging
+
+To build with debug symbols:
+```bash
+bazelisk build --config=rp2350 --copt=-g --strip=never //src:pico_ethernet_firmware
+```
+
+To attach a debugger on a running application (or potentially a crashed one),
+e.g. using [Raspberry Pi pico's openocd
+fork](https://github.com/raspberrypi/openocd):
+```bash
+openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg -c "adapter speed 5000"
+```
+
+Then connect a debugger (e.g. `gdb`) as usual, for example:
+```
+gdb bazel-bin/src/pico_ethernet_firmware \
+  -ex "target extended-remote :3333" \
+  -ex "bt" -ex "frame 2" -ex "info args" -ex "info locals" \
+  -ex "p *ep" -ex "p/x *buf_reg" -ex "x/1xw 0x50110058"
+```
+
 ## Credits
 
 Most of the source code is LLM generated with a mix of models (GLM 5.3 and 5.2,

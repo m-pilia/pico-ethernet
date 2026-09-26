@@ -33,6 +33,11 @@ extern "C" {
 
 #define CFG_TUD_ENDPOINT0_SIZE 64
 
+// tud_task_ext() runs only in the USB interrupt, so each run must drain the whole
+// event queue: events left behind by a per-run limit would wait for an interrupt
+// that an idle bus may never raise.
+#define CFG_TUD_TASK_EVENTS_PER_RUN 0
+
 // Network class only. The net class has two drivers, ECM/RNDIS and NCM; we use
 // NCM (Linux binds cdc_ncm natively) for its NTB datagram aggregation. Exactly
 // one must be enabled.

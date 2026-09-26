@@ -1,6 +1,7 @@
 common --enable_bzlmod
 common --check_direct_dependencies=off
 common --incompatible_default_to_explicit_init_py
+common --incompatible_strict_action_env
 
 build --copt=-O2
 build --cxxopt=-Wall

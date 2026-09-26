@@ -1,0 +1,43 @@
+diff --git a/src/portable/raspberrypi/rp2040/dcd_rp2040.c b/src/portable/raspberrypi/rp2040/dcd_rp2040.c
+index 564ded535..8992c88e7 100644
+--- a/src/portable/raspberrypi/rp2040/dcd_rp2040.c
++++ b/src/portable/raspberrypi/rp2040/dcd_rp2040.c
+@@ -120,7 +120,7 @@ static void hw_endpoint_abort_xfer(struct hw_endpoint* ep) {
+   // Abort any pending transfer
+   const uint8_t  dir        = (uint8_t)tu_edpt_dir(ep->ep_addr);
+   const uint8_t  epnum      = tu_edpt_number(ep->ep_addr);
+-  const uint32_t abort_mask = TU_BIT((epnum << 1) | (dir ? 0 : 1));
++  const uint32_t abort_mask = rp2usb_ep_bit(ep->ep_addr);
+ 
+   // Due to Errata RP2040-E2: ABORT flag is only applicable for B2 and later (unusable for B0, B1).
+   // Which means we are not guaranteed to safely abort pending transfer on B0 and B1.
+diff --git a/src/portable/raspberrypi/rp2040/rp2040_usb.c b/src/portable/raspberrypi/rp2040/rp2040_usb.c
+index 96b335bd3..428924b88 100644
+--- a/src/portable/raspberrypi/rp2040/rp2040_usb.c
++++ b/src/portable/raspberrypi/rp2040/rp2040_usb.c
+@@ -353,7 +353,7 @@ bool __tusb_irq_path_func(rp2usb_xfer_continue)(hw_endpoint_t *ep, io_rw_32 *ep_
+   // Note: Host mode current does not save next transfer data due to shared epx --> potential issue. However, RP2040-E4
+   // causes more or less of the same issue since it write to buf1 and next time it continues to transfer on buf0 (stale)
+   if (is_short && is_double && is_rx && !is_last) {
+-    const uint32_t abort_bit = TU_BIT(tu_edpt_number(ep->ep_addr) << 1); // abort is device only -> IN endpoint
++    const uint32_t abort_bit = rp2usb_ep_bit(ep->ep_addr); // EP_ABORT is device only, the host stops the transaction
+ 
+     if (is_host) {
+       // host stop current transfer, not safe, can be racing
+diff --git a/src/portable/raspberrypi/rp2040/rp2040_usb.h b/src/portable/raspberrypi/rp2040/rp2040_usb.h
+index e5a54007c..d2e37c71d 100644
+--- a/src/portable/raspberrypi/rp2040/rp2040_usb.h
++++ b/src/portable/raspberrypi/rp2040/rp2040_usb.h
+@@ -154,6 +154,12 @@ TU_ATTR_ALWAYS_INLINE static inline bool rp2usb_is_host_mode(void) {
+   return (usb_hw->main_ctrl & USB_MAIN_CTRL_HOST_NDEVICE_BITS) ? true : false;
+ }
+ 
++// Bit of an endpoint in the per-endpoint registers (BUFF_STATUS, BUFF_CPU_SHOULD_HANDLE, EP_ABORT, EP_ABORT_DONE):
++// 2n for EPn IN, 2n+1 for EPn OUT.
++TU_ATTR_ALWAYS_INLINE static inline uint32_t rp2usb_ep_bit(uint8_t ep_addr) {
++  return TU_BIT((tu_edpt_number(ep_addr) << 1) | (tu_edpt_dir(ep_addr) == TUSB_DIR_IN ? 0u : 1u));
++}
++
+ extern critical_section_t rp2usb_lock;
+ 
+ TU_ATTR_ALWAYS_INLINE static inline void rp2usb_critical_enter(void) {

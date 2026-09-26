@@ -2,4 +2,5 @@ exports_files([
     "tinyusb.BUILD",
     "tinyusb_ncm_multicast_filter.patch",
     "tinyusb_ncm_statistics.patch",
+    "tinyusb_rp2_device_abort_bit.patch",
 ])

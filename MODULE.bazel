@@ -53,11 +53,12 @@ new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl"
 new_git_repository(
     name = "patched_tinyusb",
     build_file = "//patches:tinyusb.BUILD",
-    commit = "94d5e74f63d49131d733cc847f1aa71c558101ac",  # upstream master: native link-state + packet-filter callbacks
+    commit = "296611d1af00ca997bcb52b056fd01b765e2662f",
     patch_args = ["-p1"],
     patches = [
         "//patches:tinyusb_ncm_multicast_filter.patch",
         "//patches:tinyusb_ncm_statistics.patch",
+        "//patches:tinyusb_rp2_device_abort_bit.patch",
     ],
     remote = "https://github.com/hathach/tinyusb.git",
 )

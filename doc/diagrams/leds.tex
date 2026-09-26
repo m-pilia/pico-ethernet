@@ -1,0 +1,22 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{circuitikz}
+\begin{document}
+\begin{circuitikz}[
+  american, font=\footnotesize,
+  every node/.style={inner sep=3pt},
+]
+  \draw (0,2.6) node[left]{GP14 (link)}
+    to[R, l={\shortstack{$R_y$\\$470\,\Omega$}}] (3,2.6)
+    node[above]{JP1 Y+}
+    to[led, l={\shortstack{yellow\\MagJack 9/10}}, *-*] (6,2.6)
+    node[above]{JP1 Y$-$}
+    -- (7,2.6) -- (7,2.2) node[ground]{};
+
+  \draw (0,0) node[left]{GP15 (activity)}
+    to[R, l={\shortstack{$R_g$\\$470\,\Omega$}}] (3,0)
+    node[above]{JP1 G+}
+    to[led, l={\shortstack{green\\MagJack 11/12}}, *-*] (6,0)
+    node[above]{JP1 G$-$}
+    -- (7,0) -- (7,-0.4) node[ground]{};
+\end{circuitikz}
+\end{document}

@@ -5,10 +5,11 @@ SVGS := $(SRCS:.tex=.svg)
 
 PNG_DPI ?= 160
 
-.PHONY: all svg clean rx tx
+.PHONY: all svg clean leds rx tx
 all: $(PDFS) $(PNGS)
 svg: $(SVGS)
 
+leds: leds.pdf leds.png
 rx: rx_frontend.pdf rx_frontend.png
 tx: tx_frontend.pdf tx_frontend.png
 

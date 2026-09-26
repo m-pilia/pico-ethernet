@@ -1,0 +1,12 @@
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+cc_test(
+    name = "activity_blink_test",
+    srcs = ["activity_blink_test.cpp"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//src/util:activity_blink",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
+)

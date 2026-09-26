@@ -11,6 +11,7 @@ cc_binary(
         "//src/usb:usb_net_device",
         "//src/usb:usb_descriptors",
         "//src/util:led_heartbeat",
+        "//src/util:nic_leds",
         "@pico-sdk//src/rp2_common/pico_stdlib",
     ],
 )

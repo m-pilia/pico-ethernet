@@ -8,6 +8,7 @@
 #include "src/phy/phy.h"
 #include "src/usb/usb_net_device.h"
 #include "src/util/led_heartbeat.h"
+#include "src/util/nic_leds.h"
 
 // Bounds the combined footprint of the two large .bss objects so buffer growth
 // trips a compile error instead of a silent RAM overrun.
@@ -27,6 +28,8 @@ constexpr std::uint32_t backoff_seed(const pico_ethernet::MacAddress& mac) {
 int main() {
     constexpr pico_ethernet::MacAddress DEVICE_MAC{pico_ethernet::MacAddress::generate_default()};
     constexpr std::uint32_t LED_PIN{25}; // Pico 2 onboard LED
+    // The MagJack's yellow and green LEDs.
+    constexpr pico_ethernet::NicLeds::Pins NIC_LED_PINS{.link = 14, .activity = 15};
 
     // Bring up the PHY first: it sets the 120 MHz system clock the PIO timing
     // depends on, before the USB stack starts.
@@ -43,8 +46,11 @@ int main() {
         led.bad();
     }
 
+    pico_ethernet::NicLeds nic_leds{NIC_LED_PINS};
+
     while (true) {
         device.task();
+        nic_leds.update(phy.link_up(), phy.wire_activity());
     }
 
     return 0;

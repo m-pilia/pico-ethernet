@@ -125,6 +125,13 @@ class Phy {
 
     [[nodiscard]] const CsmaStats& csma_stats() const { return csma_stats_; }
 
+    // Running count of wire activity: every transmit attempt, collided ones
+    // included, and every capture that decoded data, whether it was queued or
+    // dropped on pool overflow. Link pulses either way are not activity. Wraps.
+    [[nodiscard]] std::uint32_t wire_activity() const {
+        return tx_attempts_ + rx_captures_.load(std::memory_order_relaxed);
+    }
+
   private:
     void configure_tx();
     void configure_rx();
@@ -181,6 +188,7 @@ class Phy {
     std::size_t tx_head_{0};
     std::size_t tx_tail_{0};
     bool attempt_in_flight_{false};
+    std::uint32_t tx_attempts_{0};
 
     std::atomic<bool> active_{false}; // set in start_tx (thread), cleared in on_tx_complete (IRQ)
 
@@ -232,6 +240,9 @@ class Phy {
     static constexpr std::size_t RX_POOL_SIZE{6};
     std::array<std::array<std::uint32_t, RX_WORD_CAPACITY>, RX_POOL_SIZE> rx_pool_{};
     RxSlotRing<RX_POOL_SIZE> rx_ring_{};
+
+    // Written only in on_rx_eof() (end-of-frame interrupt).
+    std::atomic<std::uint32_t> rx_captures_{0};
 
     // The drain unpacks the packed capture words straight into rx_frame_ as the
     // byte-aligned destination..FCS frame in a single pass. Main-loop-owned.

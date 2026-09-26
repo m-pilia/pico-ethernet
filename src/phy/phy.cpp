@@ -293,6 +293,7 @@ void __not_in_flash_func(Phy::on_rx_eof)() {
 
     // Hand the DMA a free buffer for the next frame and queue this one for the
     // main-loop drain. No parsing or copying here -- that is the drain's job.
+    rx_captures_.store(rx_captures_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
     rearm_capture(rx_ring_.publish(words));
 }
 
@@ -364,6 +365,7 @@ void __not_in_flash_func(Phy::start_tx)(const WireFrame& frame) {
     // Clear it once that octet is delivered so a TXSTALL seen in on_tx_complete()
     // means a mid-frame FIFO underrun. The mask also keeps a long ISR from delaying
     // that clear past the end of the frame.
+    ++tx_attempts_;
     tx_start_us_.store(time_us_32(), std::memory_order_relaxed);
     active_.store(true, std::memory_order_relaxed);
     pio_interrupt_clear(pio_, sm_qualify_);

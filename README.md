@@ -128,13 +128,13 @@ gdb bazel-bin/src/pico_ethernet_firmware \
 Most of the source code is LLM generated with a mix of models (GLM 5.3 and 5.2,
 GPT-5.6-Sol and GPT-6-astra, Claude Opus 4.8).
 
-## License
-
-This project is made available under a [MIT LICENSE](LICENSE).
-
 ## Disclaimer
 
 This is a technical demo, and while it is developed following best engineering
 practices and with significant effort on testing and validation, it remains
 primarily a project for demonstration purpose. Do not consider it
 production-ready, and use it solely at your own risk.
+
+## License
+
+This project is made available under a [MIT LICENSE](LICENSE).

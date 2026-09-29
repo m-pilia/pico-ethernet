@@ -14,7 +14,7 @@ device](https://en.wikipedia.org/wiki/Ethernet_over_USB).
   and so are PIO 1 and 2, 14 out of the 16 DMA channels, 3 out of 4 DMA
   interrupt lines, and most of the memory. There is room to comfortably run a
   non-trivial second application in parallel on the Pico.
-* Production-quality firmware implementation following industrial best practices.
+* Quality firmware implementation following best practices.
 
 # Building
 

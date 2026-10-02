@@ -79,6 +79,11 @@ RCVBUF_BYTES = 16 * 1024 * 1024
 # Simple IMIX: seven small, four medium, one large, by payload length.
 IMIX_PAYLOADS = [MIN_PAYLOAD] * 7 + [576] * 4 + [MAX_PAYLOAD]
 
+# The level a frame's last bit leaves on the wire: the last FCS bit, 0 ending low and
+# 1 ending high. "mixed" leaves it to the frame content.
+FRAME_ENDINGS = ("mixed", "low", "high")
+LAST_WIRE_BIT = {"low": 0, "high": 1}
+
 
 
 def parse_mac(text):
@@ -94,15 +99,36 @@ def wire_bytes(payload_len):
     return l2 + 4 + 8 + 12
 
 
+def seal_payload(body):
+    size = len(body)
+    struct.pack_into(">I", body, size - CRC_LEN, zlib.crc32(body[: size - CRC_LEN]) & 0xFFFFFFFF)
+
+
 def build_payload(stream, seq, size):
     size = max(size, MIN_PAYLOAD)
     body = bytearray(size)
     struct.pack_into(">4sBIH", body, 0, MAGIC, stream, seq & 0xFFFFFFFF, size)
     for i in range(HEADER_LEN, size - CRC_LEN):
         body[i] = (seq + i) & 0xFF
-    crc = zlib.crc32(bytes(body[: size - CRC_LEN])) & 0xFFFFFFFF
-    struct.pack_into(">I", body, size - CRC_LEN, crc)
-    return bytes(body)
+    seal_payload(body)
+    return body
+
+
+def build_frame(header, stream, seq, size, ending):
+    """The frame the NIC sends, without the FCS it appends. The last bit on the wire is
+    bit 31 of the FCS; an `ending` other than "mixed" sets it by retuning the last
+    filler octet of the payload."""
+    payload = build_payload(stream, seq, size)
+    if ending == "mixed":
+        return header + payload
+    last_filler = len(payload) - CRC_LEN - 1
+    for value in range(256):
+        payload[last_filler] = value
+        seal_payload(payload)
+        frame = header + payload
+        if zlib.crc32(frame) >> 31 == LAST_WIRE_BIT[ending]:
+            return frame
+    raise RuntimeError(f"no filler value gives a frame ending {ending}")
 
 
 def check_payload(payload):
@@ -177,7 +203,7 @@ def size_picker(spec):
     return lambda: value
 
 
-def sender_loop(sock, stop, deadline, stream, src, dst, size_spec, load_pct, start_delay):
+def sender_loop(sock, stop, deadline, stream, src, dst, size_spec, frame_ending, load_pct, start_delay):
     header = dst + src + struct.pack(">H", ETHERTYPE)
     pick = size_picker(size_spec)
     pacer = Pacer(load_pct)
@@ -187,7 +213,7 @@ def sender_loop(sock, stop, deadline, stream, src, dst, size_spec, load_pct, sta
     start = time.perf_counter()
     while not stop.is_set() and time.time() < deadline:
         size = pick()
-        sock.send(header + build_payload(stream, seq, size))
+        sock.send(build_frame(header, stream, seq, size, frame_ending))
         seq += 1
         bits = wire_bytes(size) * 8
         wire_bits += bits
@@ -246,6 +272,7 @@ def worker_main(argv):
     p.add_argument("--send-dst")
     p.add_argument("--recv-stream", type=int, default=0)
     p.add_argument("--size", default="min")
+    p.add_argument("--frame-ending", choices=FRAME_ENDINGS, default="mixed")
     p.add_argument("--load", type=float, default=90.0)
     p.add_argument("--duration", type=float, default=10.0)
     p.add_argument("--live", action="store_true")
@@ -276,7 +303,8 @@ def worker_main(argv):
         threads.append(threading.Thread(
             target=sender_loop,
             args=(sock, stop, deadline, args.send_stream, parse_mac(args.send_src),
-                  parse_mac(args.send_dst), args.size, args.load, args.start_delay),
+                  parse_mac(args.send_dst), args.size, args.frame_ending, args.load,
+                  args.start_delay),
         ))
     for t in threads:
         t.start()
@@ -423,12 +451,13 @@ def plan_workers(direction, peer, pico, peer_mac, pico_mac):
     return peer_spec, pico_spec
 
 
-def worker_argv(spec, size, stream_loads, duration, live):
+def worker_argv(spec, size, frame_ending, stream_loads, duration, live):
     argv = ["--iface", spec["iface"]]
     if "send" in spec:
         stream, src, dst = spec["send"]
         argv += ["--send-stream", str(stream), "--send-src", src, "--send-dst", dst,
-                 "--size", size, "--load", str(stream_loads[stream])]
+                 "--size", size, "--frame-ending", frame_ending,
+                 "--load", str(stream_loads[stream])]
     if "recv" in spec:
         argv += ["--recv-stream", str(spec["recv"])]
     if live:
@@ -451,7 +480,7 @@ def direction_loads(direction, load, tx_share, duplex):
     return loads
 
 
-def run_step(specs, size, stream_loads, duration, live):
+def run_step(specs, size, frame_ending, stream_loads, duration, live):
     printed_live = {"count": 0}
 
     def on_event(event):
@@ -466,7 +495,7 @@ def run_step(specs, size, stream_loads, duration, live):
 
     handles = []
     for spec in specs:
-        argv = worker_argv(spec, size, stream_loads, duration, live)
+        argv = worker_argv(spec, size, frame_ending, stream_loads, duration, live)
         handles.append(spawn_worker(spec["in_netns"], argv, on_event))
 
     try:
@@ -551,6 +580,10 @@ def run_main(argv):
                         "(default %(default)s)")
     p.add_argument("--size", default="max",
                    help="min|max|imix|random|<bytes> (payload length; default %(default)s)")
+    p.add_argument("--frame-ending", choices=FRAME_ENDINGS, default="mixed",
+                   help="level the last bit of every frame leaves on the wire: low or high "
+                        "forces it through the payload, mixed leaves it to the content "
+                        "(default %(default)s)")
     p.add_argument("--load", type=float, default=90.0,
                    help="offered load as percent of 10 Mbit/s: in half duplex the aggregate "
                         "on the shared medium (split across directions when both), in full "
@@ -654,7 +687,8 @@ def run_main(argv):
             print(f"\n=== load: {label} ===")
             if args.live:
                 print("(running until Ctrl-C; failures print below)")
-            per_stream = run_step(specs, args.size, stream_loads, args.duration, args.live)
+            per_stream = run_step(specs, args.size, args.frame_ending, stream_loads,
+                                  args.duration, args.live)
             print_step_result(per_stream)
             if not step_passes(per_stream, args.loss_threshold):
                 overall_ok = False

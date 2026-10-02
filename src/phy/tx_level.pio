@@ -9,25 +9,43 @@
 ;
 ; 120 MHz clock, 12 cycles/bit, 6 cycles/half-bit. The per-arm delays are chosen
 ; so both arms total exactly 12 cycles with a 6/6 half-bit split, absorbing the
-; out/jmp loop overhead into the trailing half:
-;   bit=1 arm: out+jmp(2) + set[5](6) + set[2](3) + jmp(1)      = 12
-;   bit=0 arm: out+jmp(2) + set[5](6) + set[3](4)               = 12
+; end-of-data check and the out/jmp loop overhead into the trailing half:
+;   bit=1 arm: jmp !osre+out+jmp(3) + set[5](6) + set[1](2) + jmp(1) = 12
+;   bit=0 arm: jmp !osre+out+jmp(3) + set[5](6) + set[2](3)          = 12
 ; giving first-half dwell 6 and trailing-half dwell 6 (the trailing set's dwell
-; includes the following out/jmp cycles, during which the pins hold that level).
-; The exact split is confirmed and trimmed on-target by the DBG_PADOUT self-test
-; and the scope.
+; includes the following jmp !osre/out/jmp cycles, during which the pins hold that
+; level). The exact split is confirmed on-target by the pin-capture self-test and
+; the scope.
+;
+; End of transmission. Autopull refills the OSR from the FIFO on every non-OUT
+; cycle, and on the OUT that shifts out its last bit, whenever the FIFO holds data.
+; An OSR still empty at the next bit boundary therefore means the FIFO ran dry: the
+; data has ended. The machine completes the last bit cell, holds the line positive
+; for TP_IDL_CYCLES whatever the last bit was (the start of idle), releases it to
+; 0 V, and then raises its SM-relative interrupt flag on every cycle until it is
+; restarted. Link pulses are SET instructions the CPU executes in that loop.
 
 .program tx_level
 
-.wrap_target
-loop:
-    out x, 1                 ; next data bit -> X (autopull, LSB-first)
+.define PUBLIC TP_IDL_CYCLES 36
+
+    pull                     ; the first octet; a no-op if autopull got there first
+data:
+    out x, 1
     jmp !x, bit0
     ; bit = 1 : L (-Vdiff) then H (+Vdiff)
     set pins, 0b10 [5]       ; leading half  -V   (6 cyc)
-    set pins, 0b01 [2]       ; trailing half +V   (3 cyc + 3 overhead = 6)
-    jmp loop
+    set pins, 0b01 [1]       ; trailing half +V   (2 cyc + 4 overhead = 6)
+    jmp next_bit
 bit0:                        ; bit = 0 : H (+Vdiff) then L (-Vdiff)
     set pins, 0b01 [5]       ; leading half  +V   (6 cyc)
-    set pins, 0b10 [3]       ; trailing half -V   (4 cyc + 2 overhead = 6)
+    set pins, 0b10 [2]       ; trailing half -V   (3 cyc + 3 overhead = 6)
+next_bit:
+    jmp !osre, data
+    nop [1]                  ; the rest of the last trailing half
+    set pins, 0b01 [31]      ; start of idle: 32 cycles here...
+    nop [TP_IDL_CYCLES - 33] ; ...and the remainder here
+    set pins, 0b00
+.wrap_target
+    irq set 0 rel
 .wrap

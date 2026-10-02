@@ -23,6 +23,13 @@ inline constexpr std::uint32_t SLOT_TIME_NS{SLOT_TIME_BITS * BIT_TIME_NS};
 inline constexpr std::uint32_t JAM_BITS{32};
 inline constexpr std::uint32_t MAX_TX_ATTEMPTS{16};
 
+// Start of idle (TP_IDL): every transmission, a jam included, ends with the line
+// held positive from the end of its last bit cell, longer than any Manchester
+// symbol, before it is released.
+inline constexpr std::uint32_t TP_IDL_MIN_NS{250};
+inline constexpr std::uint32_t TP_IDL_NS{300};
+static_assert(TP_IDL_NS >= TP_IDL_MIN_NS);
+
 // The truncation point of the binary exponential backoff: after the n-th collision
 // the draw spans [0, 2^min(n, BACKOFF_TRUNCATION) - 1] slot times.
 inline constexpr std::uint32_t BACKOFF_TRUNCATION{10};
@@ -127,6 +134,9 @@ static_assert(
     static_cast<std::uint64_t>(SYS_CLOCK_HZ) * HALF_BIT_NS % 1'000'000'000 == 0,
     "half-bit is not an integer number of PIO cycles at SYS_CLOCK_HZ");
 static_assert(PIO_CYCLES_PER_HALF_BIT == 6 && PIO_CYCLES_PER_BIT == 12);
+
+inline constexpr std::uint32_t PIO_CYCLES_PER_TP_IDL{TP_IDL_NS * SYS_CYCLES_PER_US / 1000};
+static_assert(TP_IDL_NS * SYS_CYCLES_PER_US % 1000 == 0, "TP_IDL is not an integer number of PIO cycles");
 
 } // namespace pico_ethernet
 

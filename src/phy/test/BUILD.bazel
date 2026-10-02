@@ -7,7 +7,10 @@ cc_library(
     srcs = ["tx_reference.cpp"],
     hdrs = ["tx_reference.h"],
     visibility = ["//src/phy:__subpackages__"],
-    deps = ["//src/phy:tx_level"],
+    deps = [
+        "//src/phy:phy_timing",
+        "//src/phy:tx_level",
+    ],
 )
 
 cc_test(
@@ -223,6 +226,7 @@ cc_binary(
         ":phy_harness",
         ":pin_capture",
         ":symbol_trace",
+        ":tx_reference",
         "//src/mac:ethernet_frame",
         "//src/phy:csma_cd",
         "//src/phy:phy",

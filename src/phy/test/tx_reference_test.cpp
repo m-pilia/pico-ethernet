@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 #include "src/phy/tx_level.h"
 
@@ -67,6 +68,34 @@ TEST(ReferenceEncoder, WritesTwoHalfBitsPerDataBitAndNoMore) {
     }
     EXPECT_EQ(out[48].level, LEVEL_IDLE);
     EXPECT_EQ(out[49].level, LEVEL_IDLE);
+}
+
+// The frame's own half-bits, the last of them at `last_data_level`, then
+// TP_IDL_HALF_BITS positive ones, then nothing.
+void expect_transmission(std::span<const std::uint8_t> frame, std::uint8_t last_data_level) {
+    std::array<HalfBit, 64> data{};
+    std::array<HalfBit, 64> out{};
+    const std::size_t data_half_bits{encode_reference(frame, data)};
+    ASSERT_EQ(encode_transmission(frame, out), data_half_bits + TP_IDL_HALF_BITS);
+    EXPECT_EQ(out[data_half_bits - 1].level, last_data_level);
+
+    for (std::size_t i{0}; i < data_half_bits; ++i) {
+        EXPECT_EQ(out[i].level, data[i].level) << "half-bit " << i;
+    }
+    for (std::size_t i{data_half_bits}; i < data_half_bits + TP_IDL_HALF_BITS; ++i) {
+        EXPECT_EQ(out[i].level, LEVEL_POS) << "half-bit " << i;
+    }
+    EXPECT_EQ(out[data_half_bits + TP_IDL_HALF_BITS].level, LEVEL_IDLE);
+}
+
+TEST(ReferenceEncoder, TransmissionEndingInOneExtendsItsHighToTheStartOfIdle) {
+    const std::array<std::uint8_t, 2> frame{0x55, 0x80};
+    expect_transmission(frame, LEVEL_POS);
+}
+
+TEST(ReferenceEncoder, TransmissionEndingInZeroStepsUpToTheStartOfIdle) {
+    const std::array<std::uint8_t, 2> frame{0x55, 0x7F};
+    expect_transmission(frame, LEVEL_NEG);
 }
 
 TEST(ReferenceEncoder, EmptyFrameWritesNothing) {

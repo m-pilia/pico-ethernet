@@ -98,15 +98,16 @@ class Phy {
     // sense and the interframe gap.
     void commit_tx();
 
-    // True while a frame is being clocked out.
+    // True while a transmission is on the wire, its start of idle included.
     [[nodiscard]] bool transmitting() const;
 
     // Drives the link and the transmit side: advances autonegotiation and the link
     // integrity test, resolves the attempt that just ended, starts the next queued
     // frame once the transmit policy allows it, and discards queued frames while the
     // link is down. Collision response (abort, jam) happens in the
-    // carrier-qualification interrupt, and end-of-transmit finalization in the TX-DMA
-    // completion interrupt, not here. Call from the loop.
+    // carrier-qualification interrupt, and end-of-transmit finalization in the
+    // interrupt the TX state machine raises once it has released the line, not here.
+    // Call from the loop.
     void service();
 
     // Dequeues one frame the end-of-frame interrupt captured, recovers it in a
@@ -127,8 +128,8 @@ class Phy {
     // (the drain fell behind line rate). A visible, counted drop, not a silent loss.
     [[nodiscard]] std::uint32_t rx_pool_overflow() const { return rx_ring_.overflow(); }
 
-    // Running counts of frames fully clocked onto the wire: clean ones, and ones
-    // where the TX FIFO ran dry mid-frame (the SM stalled, stretching a half-bit).
+    // Running counts of transmitted frames: clean ones, and ones the TX FIFO ran dry
+    // in, which end on the wire where their data ran out.
     [[nodiscard]] std::uint32_t tx_sent() const { return tx_sent_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint32_t tx_underrun() const { return tx_underrun_.load(std::memory_order_relaxed); }
 
@@ -157,11 +158,8 @@ class Phy {
     // Both run with interrupts masked, by service().
     void advance_tx();
     void start_tx(const WireFrame& frame);
-    [[nodiscard]] std::uint32_t tx_stall_mask() const;
-    [[nodiscard]] pio_interrupt_source_t qualify_interrupt_source() const;
     void on_tx_complete();
-    static void tx_dma_irq_handler();
-    void force_idle();
+    static void tx_done_irq_handler();
     void emit_pulse();
     [[nodiscard]] bool emit_nlp();
     [[nodiscard]] std::uint32_t emit_link_pulses();
@@ -206,7 +204,7 @@ class Phy {
     // TX queue: host frames are built in place here and clocked out one at a time.
     // Both indices belong to the main loop -- commit_tx() fills at tx_head_ and
     // service() consumes at tx_tail_ -- because a frame is not finished with when its
-    // DMA completes: a collision leaves it queued for a retry, and only the loop
+    // transmission ends: a collision leaves it queued for a retry, and only the loop
     // knows whether it is retried, abandoned or discarded. The transmit interrupts
     // therefore never move the queue on; they publish the attempt's outcome and the
     // loop acts on it. One slot stays free to tell full from empty, so N slots queue
@@ -221,13 +219,13 @@ class Phy {
 
     std::atomic<bool> active_{false}; // set in start_tx (thread), cleared in on_tx_complete (IRQ)
 
-    // Written only in on_tx_complete() (TX-DMA interrupt).
+    // Written only in on_tx_complete() (TX-done interrupt).
     std::atomic<std::uint32_t> tx_sent_{0};
     std::atomic<std::uint32_t> tx_underrun_{0};
 
     // When the medium last fell idle -- a carrier deasserting, or our own
     // transmission (frame or jam) draining -- which is where the interframe gap and
-    // the backoff grid are measured from. Written in the carrier and TX-DMA
+    // the backoff grid are measured from. Written in the carrier and TX-done
     // interrupts, read by the loop.
     std::atomic<std::uint32_t> medium_free_us_{0};
 

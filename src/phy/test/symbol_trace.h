@@ -34,13 +34,9 @@ inline constexpr std::size_t RUN_TOLERANCE_SAMPLES{1};
 // stops at the capacity of `out`.
 std::size_t level_runs(std::span<const std::uint8_t> samples, std::span<LevelRun> out);
 
-// How many half-bits a run spans: 1 or 2 when its length matches that many nominal
-// half-bits, 0 when it matches neither.
+// How many half-bits a run spans: the nearest whole number of nominal half-bits
+// when its length matches that many, 0 when it matches none.
 std::size_t half_bits_in(const LevelRun& run);
-
-// True when a run is far longer than a symbol, which at the end of a transmission
-// is the state machine stalling on an empty FIFO and holding the last level.
-bool is_stall(const LevelRun& run);
 
 const char* level_name(std::uint8_t level);
 

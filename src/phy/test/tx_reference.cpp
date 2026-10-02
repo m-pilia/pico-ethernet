@@ -3,6 +3,7 @@
 
 #include "src/phy/test/tx_reference.h"
 
+#include <algorithm>
 #include <cassert>
 
 #include "src/phy/tx_level.h"
@@ -27,6 +28,13 @@ std::size_t encode_reference(std::span<const std::uint8_t> frame, std::span<Half
         out[2 * i + 1] = HalfBit{one ? LEVEL_POS : LEVEL_NEG};
     }
     return nbits * 2;
+}
+
+std::size_t encode_transmission(std::span<const std::uint8_t> frame, std::span<HalfBit> out) {
+    const std::size_t data{encode_reference(frame, out)};
+    assert(out.size() >= data + TP_IDL_HALF_BITS);
+    std::ranges::fill(out.subspan(data, TP_IDL_HALF_BITS), HalfBit{LEVEL_POS});
+    return data + TP_IDL_HALF_BITS;
 }
 
 } // namespace pico_ethernet

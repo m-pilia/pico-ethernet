@@ -29,6 +29,7 @@
 #include "src/phy/test/phy_harness.h"
 #include "src/phy/test/pin_capture.h"
 #include "src/phy/test/symbol_trace.h"
+#include "src/phy/test/tx_reference.h"
 #include "src/phy/tx_level.h"
 #include "src/util/led_heartbeat.h"
 
@@ -51,16 +52,18 @@ static_assert(COLLISION_AT_US * 1000 > PREAMBLE_SFD_LEN * 8 * BIT_TIME_NS);
 static_assert(COLLISION_AT_US < SLOT_TIME_US);
 
 // What the abort cannot cut short: the octets queued in the 4-entry TX FIFO and the
-// one shifting out of the OSR drain ahead of the jam, and then the jam goes out.
+// one shifting out of the OSR drain ahead of the jam, then the jam goes out, and the
+// start of idle closes it.
 constexpr std::uint32_t QUEUED_OCTETS{4 + 1};
-constexpr std::uint32_t DRAIN_AND_JAM_US{((QUEUED_OCTETS * 8 + JAM_BITS) * BIT_TIME_NS + 999) / 1000};
+constexpr std::uint32_t DRAIN_JAM_AND_TP_IDL_US{
+    ((QUEUED_OCTETS * 8 + JAM_BITS) * BIT_TIME_NS + TP_IDL_NS + 999) / 1000};
 
 // Headroom for the qualification interrupt's latency, and for this test's own delay
 // in noticing that the frame has started, which the measured response includes.
 constexpr std::uint32_t RESPONSE_SLACK_US{12};
 
 // The longest the line may stay driven after the carrier appears.
-constexpr std::uint32_t MAX_COLLISION_RESPONSE_US{CARRIER_QUALIFY_US + DRAIN_AND_JAM_US + RESPONSE_SLACK_US};
+constexpr std::uint32_t MAX_COLLISION_RESPONSE_US{CARRIER_QUALIFY_US + DRAIN_JAM_AND_TP_IDL_US + RESPONSE_SLACK_US};
 
 // How long the injected carrier is then held: past the whole collision response, so
 // the medium falls free when the test says it does rather than when the jam ends.
@@ -100,8 +103,10 @@ static_assert(
 constexpr std::size_t RUN_CAPACITY{Capture::SAMPLE_COUNT / HALF_BIT_SAMPLES + 16};
 
 // The jam is 32 bits of 0xAA: alternating data bits, so every half-bit pair but the
-// first and the last merges into a two-half-bit run.
+// first and the last merges into a two-half-bit run. Its last bit is a 1, whose
+// trailing +V half-bit merges into the start of idle.
 constexpr std::size_t JAM_PAIRED_RUNS{JAM_BITS - 1};
+constexpr std::size_t JAM_TAIL_HALF_BITS{1 + TP_IDL_HALF_BITS};
 
 std::array<std::uint8_t, Capture::SAMPLE_COUNT> g_samples{};
 std::array<LevelRun, RUN_CAPACITY> g_runs{};
@@ -193,8 +198,9 @@ bool check_defers_to_carrier(Phy& phy, PeerLink& peer) {
 }
 
 // Reads the capture back as runs and locates the jam: the trailing group of paired
-// half-bit runs, which the all-zero frame data cannot produce. `driven_samples` is
-// how long the line was driven in total.
+// half-bit runs, which the all-zero frame data cannot produce, closed by the start
+// of idle and then a released line. `driven_samples` is how long the line was
+// driven in total.
 bool check_jam_shape(std::size_t& driven_samples) {
     const std::size_t run_count{level_runs(g_samples, g_runs)};
     if (run_count < JAM_PAIRED_RUNS + 2) {
@@ -206,14 +212,15 @@ bool check_jam_shape(std::size_t& driven_samples) {
         return false;
     }
 
-    // The transmission ends where the machine stalls holding its last symbol, which
-    // the post-frame idle drive then ends.
-    std::size_t last{run_count};
-    while (last > 0 && (g_runs[last - 1].level == LEVEL_IDLE || !is_stall(g_runs[last - 1]))) {
+    // The transmission ends in the jam's last half-bit merged with the start of idle,
+    // and the line is released after it. Link pulses may follow later in the capture.
+    std::size_t last{run_count - 1};
+    while (last > 0 && !(g_runs[last].level == LEVEL_IDLE && g_runs[last - 1].level == LEVEL_POS &&
+                         half_bits_in(g_runs[last - 1]) == JAM_TAIL_HALF_BITS)) {
         --last;
     }
     if (last == 0) {
-        printf("FAIL: no end of transmission in the capture\n");
+        printf("FAIL: no transmission closed by the start of idle and a released line\n");
         return false;
     }
     const LevelRun& tail{g_runs[last - 1]};
@@ -222,10 +229,10 @@ bool check_jam_shape(std::size_t& driven_samples) {
     while (first_driven < run_count && g_runs[first_driven].level == LEVEL_IDLE) {
         ++first_driven;
     }
-    driven_samples = tail.start + HALF_BIT_SAMPLES - g_runs[first_driven].start;
+    driven_samples = tail.start + tail.len - g_runs[first_driven].start;
 
-    // Walking back from the stall, the jam is its opening half-bit run, the pairs,
-    // and the final half-bit the stall itself absorbed.
+    // Walking back from the start of idle, the jam is its opening half-bit run, the
+    // pairs, and the final half-bit the start of idle absorbed.
     std::size_t paired{0};
     std::size_t index{last - 1};
     while (index > 0 && half_bits_in(g_runs[index - 1]) == 2) {

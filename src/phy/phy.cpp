@@ -31,7 +31,7 @@ namespace pico_ethernet {
 
 namespace {
 // The GPIO IRQ callback carries no user data, so the active PHY is published here
-// for the carrier and TX-DMA trampolines to forward to.
+// for the carrier and TX-done trampolines to forward to.
 Phy* s_irq_phy{nullptr};
 
 // The qualification loop in carrier_qualify.pio samples RXC once per iteration and
@@ -41,6 +41,18 @@ constexpr std::uint32_t QUALIFY_LOOP_COUNT{CARRIER_QUALIFY_US * SYS_CYCLES_PER_U
 
 // A colliding station always completes its preamble and SFD before it jams.
 static_assert(CARRIER_QUALIFY_US * 1000 < (PREAMBLE_SFD_LEN * 8 + JAM_BITS) * BIT_TIME_NS);
+
+static_assert(tx_level_TP_IDL_CYCLES == PIO_CYCLES_PER_TP_IDL);
+
+// The qualifier and the transmitter each raise the interrupt flag of their own
+// state machine's index; the qualification goes to the PIO's interrupt line 0, the
+// end of a transmission to line 1.
+constexpr std::uint32_t QUALIFY_IRQ_INDEX{0};
+constexpr std::uint32_t TX_DONE_IRQ_INDEX{1};
+
+pio_interrupt_source_t __not_in_flash_func(sm_interrupt_source)(std::uint32_t sm) {
+    return static_cast<pio_interrupt_source_t>(pis_interrupt0 + sm);
+}
 
 // The latest received code word shares one atomic word with a flag for whether it
 // was consecutive and a sequence number, which tells the loop a new code word from
@@ -100,7 +112,6 @@ bool Phy::initialize() {
     configure_tx();
     configure_rx();
     configure_carrier_qualify();
-    force_idle();
     rearm_capture(rx_ring_.capture_slot());
 
     // Both carrier edges matter: the rising edge times a link pulse; the falling edge
@@ -109,17 +120,18 @@ bool Phy::initialize() {
     gpio_set_irq_enabled_with_callback(
         pins_.rxc, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &Phy::carrier_irq_handler);
 
-    // Finalize each transmit (idle drive, interframe gap) in the TX-DMA completion
-    // interrupt so the line is released the instant our frame drains, rather than
-    // waiting for the main loop.
-    dma_channel_set_irq0_enabled(dma_tx_, true);
-    irq_set_exclusive_handler(DMA_IRQ_0, &Phy::tx_dma_irq_handler);
-    irq_set_enabled(DMA_IRQ_0, true);
+    // Finalize each transmit (outcome, interframe gap) as soon as the TX state
+    // machine has released the line, rather than waiting for the main loop. Its flag
+    // reaches the CPU only while a transmission is under way: start_tx() enables the
+    // source and on_tx_complete() disables it.
+    const std::uint32_t tx_done_irq{static_cast<std::uint32_t>(pio_get_irq_num(pio_, TX_DONE_IRQ_INDEX))};
+    irq_set_exclusive_handler(tx_done_irq, &Phy::tx_done_irq_handler);
+    irq_set_enabled(tx_done_irq, true);
 
     // The qualifier runs all the time, but its flag only reaches the CPU while we
     // transmit in half duplex: start_tx() enables the source and on_tx_complete()
     // disables it.
-    const std::uint32_t qualify_irq{static_cast<std::uint32_t>(pio_get_irq_num(pio_, 0))};
+    const std::uint32_t qualify_irq{static_cast<std::uint32_t>(pio_get_irq_num(pio_, QUALIFY_IRQ_INDEX))};
     irq_set_exclusive_handler(qualify_irq, &Phy::carrier_qualified_irq_handler);
     irq_set_enabled(qualify_irq, true);
 
@@ -141,6 +153,7 @@ void Phy::configure_tx() {
     sm_config_set_out_shift(&tx_cfg_, true, true, 8);
     sm_config_set_clkdiv(&tx_cfg_, 1.0f);
     pio_sm_init(pio_, sm_tx_, offset_tx_, &tx_cfg_);
+    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_IDLE));
 }
 
 void Phy::configure_rx() {
@@ -169,11 +182,6 @@ void Phy::configure_carrier_qualify() {
     pio_sm_put(pio_, sm_qualify_, QUALIFY_LOOP_COUNT);
     pio_sm_exec(pio_, sm_qualify_, pio_encode_pull(false, false));
     pio_sm_set_enabled(pio_, sm_qualify_, true);
-}
-
-pio_interrupt_source_t __not_in_flash_func(Phy::qualify_interrupt_source)() const {
-    // The program raises its flag relative to its own state machine.
-    return static_cast<pio_interrupt_source_t>(pis_interrupt0 + sm_qualify_);
 }
 
 void __not_in_flash_func(Phy::rearm_capture)(std::size_t slot) {
@@ -232,19 +240,14 @@ void __not_in_flash_func(Phy::on_collision)() {
         collision_offset_us(tx_start_us_.load(std::memory_order_relaxed), time_us_32()), std::memory_order_relaxed);
     collided_.store(true, std::memory_order_relaxed);
 
-    // Aborting a channel mid-transfer can leave a completion flagged; masking the
-    // channel's interrupt across the abort and clearing it afterwards keeps the
-    // aborted frame from being mistaken for a finished one.
-    dma_channel_set_irq0_enabled(dma_tx_, false);
     abort_dma_channel(dma_tx_);
-    dma_channel_acknowledge_irq0(dma_tx_);
-    dma_channel_set_irq0_enabled(dma_tx_, true);
     hw_set_bits(&dma_channel_hw_addr(dma_tx_)->al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
 
     // The FIFO is deliberately left alone. The DMA runs octets ahead of the wire, so
     // what it holds is the part of the frame not yet transmitted -- letting it drain
     // ahead of the jam keeps the jam from ever preceding the preamble onto the line,
-    // and splices at an octet boundary instead of mid-symbol.
+    // and splices at an octet boundary instead of mid-symbol. The jam reaches the FIFO
+    // long before it drains, so the transmitter never finds its data ended in between.
     dma_channel_set_read_addr(dma_tx_, jam_.data(), false);
     dma_channel_set_trans_count(dma_tx_, jam_.size(), true);
 }
@@ -376,10 +379,13 @@ void Phy::commit_tx() {
 
 void __not_in_flash_func(Phy::start_tx)(const WireFrame& frame) {
     // Reset the SM to the program start with a cleared FIFO and empty OSR so the
-    // frame's first bit is shifted from the start of its first octet.
+    // frame's first bit is shifted from the start of its first octet. The previous
+    // transmission left the machine raising its end flag, which is cleared before its
+    // source is enabled.
     pio_sm_set_enabled(pio_, sm_tx_, false);
     pio_sm_clear_fifos(pio_, sm_tx_);
     pio_sm_init(pio_, sm_tx_, offset_tx_, &tx_cfg_);
+    pio_interrupt_clear(pio_, sm_tx_);
 
     dma_channel_config c{dma_channel_get_default_config(dma_tx_)};
     channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
@@ -398,11 +404,6 @@ void __not_in_flash_func(Phy::start_tx)(const WireFrame& frame) {
     // that has already ended and is cleared; one qualifying under the mask is
     // delivered when it lifts.
     //
-    // The SM stalls on autopull until the first octet lands, which latches TXSTALL.
-    // Clear it once that octet is delivered so a TXSTALL seen in on_tx_complete()
-    // means a mid-frame FIFO underrun. The mask also keeps a long ISR from delaying
-    // that clear past the end of the frame.
-    //
     // In full duplex the peer's carrier is on the other pair and never a collision.
     // The qualifier keeps running regardless; its interrupt is simply never enabled.
     ++tx_attempts_;
@@ -410,24 +411,14 @@ void __not_in_flash_func(Phy::start_tx)(const WireFrame& frame) {
     active_.store(true, std::memory_order_relaxed);
     if (duplex_.load(std::memory_order_relaxed) == Duplex::Half) {
         pio_interrupt_clear(pio_, sm_qualify_);
-        pio_set_irq0_source_enabled(pio_, qualify_interrupt_source(), true);
+        pio_set_irqn_source_enabled(pio_, QUALIFY_IRQ_INDEX, sm_interrupt_source(sm_qualify_), true);
     }
+    pio_set_irqn_source_enabled(pio_, TX_DONE_IRQ_INDEX, sm_interrupt_source(sm_tx_), true);
     pio_sm_set_enabled(pio_, sm_tx_, true);
     dma_channel_start(dma_tx_);
-    while (dma_channel_hw_addr(dma_tx_)->transfer_count == frame.length) {
-        tight_loop_contents();
-    }
-    pio_->fdebug = tx_stall_mask();
 }
 
-std::uint32_t __not_in_flash_func(Phy::tx_stall_mask)() const { return 1u << (PIO_FDEBUG_TXSTALL_LSB + sm_tx_); }
-
-bool __not_in_flash_func(Phy::transmitting)() const {
-    if (dma_tx_ < 0) {
-        return false;
-    }
-    return dma_channel_is_busy(dma_tx_) || !pio_sm_is_tx_fifo_empty(pio_, sm_tx_);
-}
+bool __not_in_flash_func(Phy::transmitting)() const { return active_.load(std::memory_order_relaxed); }
 
 void Phy::service() {
     advance_link(time_us_32());
@@ -558,49 +549,32 @@ void __not_in_flash_func(Phy::release_frame)() {
 
 void __not_in_flash_func(Phy::note_medium_free)() { medium_free_us_.store(time_us_32(), std::memory_order_relaxed); }
 
-void __not_in_flash_func(Phy::tx_dma_irq_handler)() {
+void __not_in_flash_func(Phy::tx_done_irq_handler)() {
     if (s_irq_phy != nullptr) {
         s_irq_phy->on_tx_complete();
     }
 }
 
 void __not_in_flash_func(Phy::on_tx_complete)() {
-    if (!dma_channel_get_irq0_status(dma_tx_)) {
-        return; // a collision aborted the transfer this interrupt was raised for
-    }
-    dma_channel_acknowledge_irq0(dma_tx_);
+    // The machine keeps raising its flag until it is restarted.
+    pio_set_irqn_source_enabled(pio_, TX_DONE_IRQ_INDEX, sm_interrupt_source(sm_tx_), false);
 
-    // A collided attempt ends in a jam, not a frame: it is neither sent nor
-    // underrun, and TXSTALL means nothing across the abort.
+    // Data still queued once the machine has ended the transmission came too late
+    // for it: the FIFO ran dry mid-frame, and the frame ended on the wire there.
+    const bool underrun{dma_channel_is_busy(dma_tx_) || !pio_sm_is_tx_fifo_empty(pio_, sm_tx_)};
+    if (underrun) {
+        abort_dma_channel(dma_tx_);
+    }
+
+    // A collided attempt ends in a jam, not a frame: it is neither sent nor underrun.
     if (!collided_.load(std::memory_order_relaxed)) {
-        // The DMA has just queued the final octets, so while the FIFO still holds data the
-        // SM cannot have stalled at the end of the frame: a TXSTALL then is an underrun.
-        // An empty FIFO here (IRQ latency beyond the queued tail) is not counted, so the
-        // count can miss underruns but never reports false ones.
-        const bool underrun{(pio_->fdebug & tx_stall_mask()) != 0u && !pio_sm_is_tx_fifo_empty(pio_, sm_tx_)};
         std::atomic<std::uint32_t>& outcome{underrun ? tx_underrun_ : tx_sent_};
         outcome.store(outcome.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
     }
 
-    // The DMA has handed off the last byte, but the PIO FIFO and shifter still hold
-    // a few bytes; wait so force_idle() does not clip the tail. The FIFO draining
-    // leaves up to one octet still shifting out of the OSR after the FIFO reads
-    // empty, so add a two-octet margin before driving idle.
-    while (transmitting()) {
-        tight_loop_contents();
-    }
-    busy_wait_at_least_cycles(2 * 8 * PIO_CYCLES_PER_BIT);
-    force_idle();
-
-    pio_set_irq0_source_enabled(pio_, qualify_interrupt_source(), false);
+    pio_set_irqn_source_enabled(pio_, QUALIFY_IRQ_INDEX, sm_interrupt_source(sm_qualify_), false);
     note_medium_free();
     active_.store(false, std::memory_order_release);
-}
-
-void __not_in_flash_func(Phy::force_idle)() {
-    // Drive the differential pair to 0 V (TP_IDL then line idle). Injected while
-    // the SM is stalled on an empty FIFO, so the level holds until the next frame.
-    pio_sm_exec(pio_, sm_tx_, pio_encode_set(pio_pins, LEVEL_IDLE));
 }
 
 void __not_in_flash_func(Phy::emit_pulse)() {
@@ -617,7 +591,7 @@ bool __not_in_flash_func(Phy::emit_nlp)() {
     // under a one-way flood; its end of frame still restarts the gap, which delays a
     // pulse by no more than the gap.
     const bool peer_carrier{duplex_.load(std::memory_order_relaxed) == Duplex::Half && gpio_get(pins_.rxc)};
-    if (active_.load(std::memory_order_relaxed) || transmitting() || peer_carrier) {
+    if (transmitting() || peer_carrier) {
         return false;
     }
     if (time_us_32() - medium_free_us_.load(std::memory_order_relaxed) < IFG_US) {

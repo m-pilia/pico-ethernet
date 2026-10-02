@@ -25,11 +25,11 @@ namespace {
 constexpr std::uint8_t USB_RHPORT{0};
 
 // NVIC priority for USBCTRL_IRQ. Higher numeric value = less urgent on Cortex-M33;
-// this is below the PHY's IRQs (RXC edge on IO_IRQ_BANK0 and TX-DMA on DMA_IRQ_0,
-// both at the pico-sdk default 0x80), so the real-time capture path preempts the
-// USB service (which runs the whole device task, including a full-MTU frame copy).
-// This is the NVIC hardware priority, distinct from the shared-handler *order*
-// priority that sequences our handler after TinyUSB's on the same line.
+// this is below the PHY's IRQs (all at the pico-sdk default 0x80), so the real-time
+// capture path preempts the USB service (which runs the whole device task,
+// including a full-MTU frame copy). This is the NVIC hardware priority, distinct
+// from the shared-handler *order* priority that sequences our handler after
+// TinyUSB's on the same line.
 constexpr std::uint8_t USB_IRQ_PRIORITY{0xC0};
 
 // The TinyUSB network callbacks have C linkage and no user-data argument, so the

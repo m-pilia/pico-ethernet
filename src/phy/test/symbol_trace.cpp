@@ -11,10 +11,6 @@
 
 namespace pico_ethernet {
 
-namespace {
-constexpr std::size_t STALL_SAMPLES{3 * HALF_BIT_SAMPLES};
-} // namespace
-
 std::size_t level_runs(std::span<const std::uint8_t> samples, std::span<LevelRun> out) {
     if (samples.empty() || out.empty()) {
         return 0;
@@ -41,15 +37,10 @@ std::size_t level_runs(std::span<const std::uint8_t> samples, std::span<LevelRun
 
 std::size_t half_bits_in(const LevelRun& run) {
     const std::size_t count{(run.len + HALF_BIT_SAMPLES / 2) / HALF_BIT_SAMPLES};
-    if (count < 1 || count > 2) {
-        return 0;
-    }
     const std::size_t nominal{count * HALF_BIT_SAMPLES};
     const std::size_t error{run.len > nominal ? run.len - nominal : nominal - run.len};
     return error <= RUN_TOLERANCE_SAMPLES ? count : 0;
 }
-
-bool is_stall(const LevelRun& run) { return run.len > STALL_SAMPLES; }
 
 const char* level_name(std::uint8_t level) {
     switch (level) {

@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "src/mac/mac_address.h"
+#include "src/mac/test/mac_test_util.h"
 
 namespace pico_ethernet {
 
@@ -21,17 +22,33 @@ constexpr MacAddress make_mac(MacAddress::Bytes bytes) {
 
 // The whole type is usable in constant expressions; verify the key operations
 // actually evaluate at compile time.
-static_assert(MacAddress::generate_default() == make_mac({0x02, 0, 0, 0, 0, 1}));
-static_assert(MacAddress::parse("02:00:00:00:00:01") == MacAddress::generate_default());
-static_assert(MacAddress::parse("020000000001") == MacAddress::generate_default());
+static_assert(test_mac_address() == make_mac({0x02, 0, 0, 0, 0, 1}));
+static_assert(MacAddress::parse("02:00:00:00:00:01") == test_mac_address());
+static_assert(MacAddress::parse("020000000001") == test_mac_address());
 static_assert(!MacAddress::parse("nope").has_value());
 static_assert(make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}).is_multicast());
 static_assert(make_mac({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}).is_broadcast());
 static_assert(!make_mac({0x01, 0x00, 0x5E, 0x00, 0x00, 0x01}).is_broadcast());
-static_assert(!MacAddress::generate_default().is_multicast());
-static_assert(!MacAddress::generate_default().is_broadcast());
-static_assert(MacAddress::generate_default().to_imac_string()[0] == '0');
-static_assert(MacAddress::generate_default().to_string()[2] == ':');
+static_assert(!test_mac_address().is_multicast());
+static_assert(!test_mac_address().is_broadcast());
+static_assert(test_mac_address().to_imac_string()[0] == '0');
+static_assert(test_mac_address().to_string()[2] == ':');
+
+constexpr std::array<std::uint8_t, 8> ID_ZEROS{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+constexpr std::array<std::uint8_t, 8> ID_ONES{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+constexpr std::array<std::uint8_t, 8> ID_ASCENDING{0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
+constexpr std::array<std::uint8_t, 8> ID_DESCENDING{0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10};
+
+// Individual, locally administered, IEEE 802c SLAP AAI quadrant.
+constexpr bool is_aai_unicast(const MacAddress& mac) { return (mac.byte(0) & 0x0F) == 0x02; }
+static_assert(is_aai_unicast(MacAddress::from_unique_id(ID_ZEROS)));
+static_assert(is_aai_unicast(MacAddress::from_unique_id(ID_ONES)));
+static_assert(is_aai_unicast(MacAddress::from_unique_id(ID_ASCENDING)));
+static_assert(is_aai_unicast(MacAddress::from_unique_id(ID_DESCENDING)));
+
+// Expected addresses computed independently with a reference fmix64.
+static_assert(MacAddress::from_unique_id(ID_ASCENDING) == make_mac({0xF2, 0xFE, 0x89, 0x02, 0x2C, 0xEA}));
+static_assert(MacAddress::from_unique_id(ID_DESCENDING) == make_mac({0xE2, 0xCC, 0x1F, 0x4A, 0x6F, 0xD7}));
 
 class MacAddressTest : public ::testing::Test {
   protected:
@@ -39,29 +56,16 @@ class MacAddressTest : public ::testing::Test {
     void TearDown() override {}
 };
 
-TEST_F(MacAddressTest, default_generation) {
-    const auto mac{MacAddress::generate_default()};
-
-    EXPECT_EQ(mac.bytes(), MacAddress::DEFAULT_BYTES);
-}
-
 TEST_F(MacAddressTest, default_constructed_is_all_zero) {
     const MacAddress mac{};
 
     EXPECT_EQ(mac.bytes(), MacAddress::Bytes{}); // 00:00:00:00:00:00
-    EXPECT_NE(mac, MacAddress::generate_default());
-    EXPECT_FALSE(mac.is_multicast());
-}
-
-TEST_F(MacAddressTest, default_properties) {
-    const auto mac{MacAddress::generate_default()};
-
-    // 02:... is a unicast (individual) address: the group bit is clear.
+    EXPECT_NE(mac, test_mac_address());
     EXPECT_FALSE(mac.is_multicast());
 }
 
 TEST_F(MacAddressTest, byte_access) {
-    const auto mac{MacAddress::generate_default()};
+    const auto mac{test_mac_address()};
 
     EXPECT_EQ(mac.byte(0), 0x02);
     EXPECT_EQ(mac.byte(1), 0x00);
@@ -73,7 +77,7 @@ TEST_F(MacAddressTest, byte_access) {
 
 #ifndef NDEBUG
 TEST_F(MacAddressTest, byte_out_of_range_asserts) {
-    const auto mac{MacAddress::generate_default()};
+    const auto mac{test_mac_address()};
 
     EXPECT_DEATH((void)mac.byte(MacAddress::LENGTH), "");
 }
@@ -84,11 +88,11 @@ TEST_F(MacAddressTest, construction_from_span) {
     const std::array<std::uint8_t, 8> frame{0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0xAA, 0xBB};
     const MacAddress mac{std::span<const std::uint8_t>{frame}.first<MacAddress::LENGTH>()};
 
-    EXPECT_EQ(mac, MacAddress::generate_default());
+    EXPECT_EQ(mac, test_mac_address());
 }
 
 TEST_F(MacAddressTest, to_string) {
-    const auto mac{MacAddress::generate_default()};
+    const auto mac{test_mac_address()};
 
     EXPECT_EQ(std::string_view(mac.to_string().data()), "02:00:00:00:00:01");
     EXPECT_EQ(std::string_view(mac.to_string('-').data()), "02-00-00-00-00-01");
@@ -103,7 +107,7 @@ TEST_F(MacAddressTest, to_string_uppercase_hex) {
 }
 
 TEST_F(MacAddressTest, to_imac_string) {
-    const auto mac{MacAddress::generate_default()};
+    const auto mac{test_mac_address()};
     const auto imac{mac.to_imac_string()};
 
     EXPECT_EQ(std::string(imac.begin(), imac.end()), "020000000001");
@@ -120,19 +124,19 @@ TEST_F(MacAddressTest, to_imac_string_uppercase_hex) {
 TEST_F(MacAddressTest, parse_string) {
     auto mac{MacAddress::parse("02:00:00:00:00:01")};
     ASSERT_TRUE(mac.has_value());
-    EXPECT_EQ(*mac, MacAddress::generate_default());
+    EXPECT_EQ(*mac, test_mac_address());
 
     mac = MacAddress::parse("02-00-00-00-00-01");
     ASSERT_TRUE(mac.has_value());
-    EXPECT_EQ(*mac, MacAddress::generate_default());
+    EXPECT_EQ(*mac, test_mac_address());
 
     mac = MacAddress::parse("02.00.00.00.00.01");
     ASSERT_TRUE(mac.has_value());
-    EXPECT_EQ(*mac, MacAddress::generate_default());
+    EXPECT_EQ(*mac, test_mac_address());
 
     mac = MacAddress::parse("020000000001");
     ASSERT_TRUE(mac.has_value());
-    EXPECT_EQ(*mac, MacAddress::generate_default());
+    EXPECT_EQ(*mac, test_mac_address());
 }
 
 TEST_F(MacAddressTest, parse_case_insensitive) {
@@ -192,7 +196,7 @@ TEST_F(MacAddressTest, multicast_address) {
 }
 
 TEST_F(MacAddressTest, unicast_is_neither_group_nor_broadcast) {
-    const auto unicast{MacAddress::generate_default()};
+    const auto unicast{test_mac_address()};
 
     EXPECT_FALSE(unicast.is_multicast());
     EXPECT_FALSE(unicast.is_broadcast());
@@ -205,7 +209,7 @@ TEST_F(MacAddressTest, almost_broadcast_is_not_broadcast) {
 }
 
 TEST_F(MacAddressTest, iteration) {
-    const auto mac{MacAddress::generate_default()};
+    const auto mac{test_mac_address()};
 
     EXPECT_EQ(mac.size(), 6);
 

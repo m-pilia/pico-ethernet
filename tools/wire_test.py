@@ -58,7 +58,6 @@ from wire_counters import (
 
 ETHERTYPE = 0x88B5
 MAGIC = b"PWT1"
-PICO_MAC_DEFAULT = "02:00:00:00:00:01"
 NETNS = "picowire"
 LINE_BPS = 10_000_000
 
@@ -322,6 +321,12 @@ def read_peer_mac(iface):
     return out.stdout.strip()
 
 
+def read_pico_mac(iface):
+    # cdc_ncm gives the netdev the device's iMACAddress, which is its wire address.
+    with open(f"/sys/class/net/{iface}/address") as f:
+        return f.read().strip()
+
+
 OFFLOAD_FEATURES = {
     "gro": "generic-receive-offload",
     "gso": "generic-segmentation-offload",
@@ -571,7 +576,8 @@ def run_main(argv):
                    help="host network interface for the Pico NIC (CDC-NCM)")
     p.add_argument("--peer-interface", required=True,
                    help="host network interface for the USB 10/100 peer adapter")
-    p.add_argument("--pico-mac", default=PICO_MAC_DEFAULT)
+    p.add_argument("--pico-mac",
+                   help="the Pico NIC's MAC (default: the address of --pico-interface)")
     p.add_argument("--direction", choices=("rx", "tx", "both"), default="rx",
                    help="rx=peer->Pico, tx=Pico->peer, both=simultaneous")
     p.add_argument("--peer-mode", choices=PEER_MODES, default="autoneg",
@@ -617,7 +623,8 @@ def run_main(argv):
         print("error: ethtool not found in PATH", file=sys.stderr)
         return 1
 
-    parse_mac(args.pico_mac)  # validate format before spawning workers
+    if args.pico_mac is not None:
+        parse_mac(args.pico_mac)  # validate format before spawning workers
 
     print("Caching sudo credentials (needed for namespace/socket setup)...")
     sudo(["-v"], check=True)
@@ -670,12 +677,13 @@ def run_main(argv):
         for probe in probes:
             probe.snapshot_baseline()
         peer_mac = read_peer_mac(args.peer_interface)
-        print(f"peer MAC {peer_mac}  ->  Pico MAC {args.pico_mac}   direction={args.direction}   "
+        pico_mac = args.pico_mac or read_pico_mac(args.pico_interface)
+        print(f"peer MAC {peer_mac}  ->  Pico MAC {pico_mac}   direction={args.direction}   "
               f"link 10/{duplex.capitalize()}")
 
         peer_spec, pico_spec = plan_workers(
             args.direction, args.peer_interface, args.pico_interface,
-            peer_mac, args.pico_mac,
+            peer_mac, pico_mac,
         )
         specs = [peer_spec, pico_spec]
 

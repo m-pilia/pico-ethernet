@@ -23,6 +23,13 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "mac_test_util",
+    testonly = True,
+    hdrs = ["mac_test_util.h"],
+    deps = ["//src/mac:mac_address"],
+)
+
 cc_test(
     name = "mac_address_test",
     srcs = ["mac_address_test.cpp"],
@@ -30,6 +37,7 @@ cc_test(
         "@googletest//:gtest",
         "@googletest//:gtest_main",
         "//src/mac:mac_address",
+        ":mac_test_util",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )

@@ -241,9 +241,6 @@ static std::optional<MacAddress> parse(std::string_view mac_str);
 
 **Good Examples (Keep):**
 ```cpp
-// 02:00:00:00:00:01 - Locally administered (bit 1 = 1), unicast (bit 0 = 0)
-static constexpr Bytes DEFAULT_BYTES{0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
-
 // One slot stays free to tell full from empty, so N slots queue N-1 frames.
 static constexpr std::size_t TX_QUEUE_SIZE{5};
 ```

@@ -13,5 +13,6 @@ cc_binary(
         "//src/util:led_heartbeat",
         "//src/util:nic_leds",
         "@pico-sdk//src/rp2_common/pico_stdlib",
+        "@pico-sdk//src/rp2_common/pico_unique_id",
     ],
 )

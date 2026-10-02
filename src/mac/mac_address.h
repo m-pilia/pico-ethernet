@@ -15,15 +15,10 @@
 namespace pico_ethernet {
 
 // An IEEE 802 MAC address (six octets).
-//
-// The default address 02:00:00:00:00:01 is locally administered (bit 1 of the
-// first octet set) and unicast (bit 0 clear).
 class MacAddress {
   public:
     static constexpr std::size_t LENGTH{6};
     using Bytes = std::array<std::uint8_t, LENGTH>;
-
-    static constexpr Bytes DEFAULT_BYTES{0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
 
     constexpr MacAddress() = default;
 
@@ -37,8 +32,25 @@ class MacAddress {
         }
     }
 
-    static constexpr MacAddress generate_default() {
-        return MacAddress(std::span<const std::uint8_t, LENGTH>(DEFAULT_BYTES));
+    // A stable unicast address for the device with the given 64-bit unique ID
+    // (big-endian), placed in the IEEE 802c SLAP AAI quadrant: locally administered
+    // and free for administrative assignment, so no OUI or CID is needed. The ID is
+    // hashed so that IDs sharing structured fields (e.g. lot or wafer numbers) still
+    // spread over the 44 free bits.
+    [[nodiscard]] static constexpr MacAddress from_unique_id(std::span<const std::uint8_t, 8> unique_id) {
+        std::uint64_t id{0};
+        for (const std::uint8_t octet : unique_id) {
+            id = (id << 8) | octet;
+        }
+        const std::uint64_t hash{fmix64(id)};
+        Bytes out{};
+        for (std::size_t i{0}; i < LENGTH; ++i) {
+            out[i] = static_cast<std::uint8_t>(hash >> (8 * (LENGTH - 1 - i)));
+        }
+        // The low nibble of the first octet holds, from bit 0: I/G, U/L, and the SLAP
+        // Y and Z bits. 0b0010 is an individual, locally administered AAI address.
+        out[0] = static_cast<std::uint8_t>((out[0] & 0xF0u) | 0x02u);
+        return MacAddress(out);
     }
 
     // Parse "AABBCCDDEEFF" or "AA:BB:CC:DD:EE:FF" (also '-' or '.' separators).
@@ -120,6 +132,17 @@ class MacAddress {
     constexpr std::size_t size() const { return address_.size(); }
 
   private:
+    // MurmurHash3 finalizer: a bijection in which every input bit affects every
+    // output bit.
+    static constexpr std::uint64_t fmix64(std::uint64_t k) {
+        k ^= k >> 33;
+        k *= 0xFF51'AFD7'ED55'8CCDu;
+        k ^= k >> 33;
+        k *= 0xC4CE'B9FE'1A85'EC53u;
+        k ^= k >> 33;
+        return k;
+    }
+
     // Low nibble of `value` as an uppercase hex digit.
     static constexpr char hex_char(std::uint8_t value) { return "0123456789ABCDEF"[value & 0x0F]; }
 

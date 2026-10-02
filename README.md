@@ -16,6 +16,31 @@ device](https://en.wikipedia.org/wiki/Ethernet_over_USB).
   non-trivial second application in parallel on the Pico.
 * Quality firmware implementation following best practices.
 
+# Status
+
+- Waveform shaping is currently not implemented. There is no pre-emphasis,
+  edges are sharper than needed, so harmonic content is likely higher than
+  it should and might not respect EMI requirements.
+- Tested on a ~30 m U/UTP Cat5e Ethernet cable. Not tested on a full 100 m
+  cable run.
+- No RX squelch of signals < 300 mV and > 585 mV and no standard-compliant
+  noise rejection.
+- The mandatory jabber detection is not implemented. In practice, however,
+  jabber cannot happen by design because the PIO stops when the buffer-sized
+  DMA runs out.
+- No detection nor correction for inverted RX polarity (not mandatory by the
+  standard).
+- RX is only gated by carrier detection and samples the signal without
+  verifying its symbols, so it might not detect an invalid Manchester code.
+- Support for VLAN-tagged frames and envelope frames is not implemented.
+- PAUSE flow control is not implemented.
+- Auto-negotiation support is partial, Next Page and Remote Fault are not
+  implemented.
+- USB suspension is not implemented.
+- TinyUSB's CDC-NCM reports 12 Mbps connection speed (USB 1.1 full-speed)
+  and currently it does not support reporting the actual 10BASE-T's 10 Mbps.
+- No support to override the MAC address from host (TinyUSB limitation).
+
 # Building
 
 ```bash

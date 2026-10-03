@@ -85,12 +85,12 @@ Mbps TCP payload.
 
 ## Attained speed
 
-The pico_ethernet firmware can sustain full speed, it is only limited by the
+The pico-ethernet firmware can sustain full speed, it is only limited by the
 host-side driver (frames can be dropped if the driver does not feed TX frames
 or drain RX frames fast enough). Testing on different USB controllers (even on
 the same machine) consistently attained different speeds for this reason.
 
-Connected to an ASMedia ASM1143 USB 3.1 controller, the pico_ethernet NIC
+Connected to an ASMedia ASM1143 USB 3.1 controller, the pico-ethernet NIC
 reached about 8.2 Mbps TX / 8.5 Mbps RX in half-duplex, and about 4.55 + 4.55
 Mbps of simultaneous TX and RX in full-duplex (raw Ethernet speed).
 

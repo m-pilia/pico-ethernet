@@ -53,7 +53,7 @@ MacAddress parse(std::string_view s) {
 
 | Rule | Rationale | Examples |
 |------|-----------|----------|
-| **Avoid raw pointers** | Prevents ownership ambiguity, memory leaks, dangling pointers | Use `std::unique_ptr`, `std::shared_ptr`, references instead |
+| **Avoid raw pointers** | Prevents ownership ambiguity, memory leaks, dangling pointers | Use `std::unique_ptr`, `std::span`, references instead |
 | **Use references for non-owning** | Clear semantics, no null checks needed, safer | `void func(const Data&)` not `void func(const Data*)` |
 | **Use `std::span` for buffers** | Safe, bounds-checked, works with arrays and containers | `void process(std::span<const uint8_t> data)` |
 | **Use `std::string_view` for strings** | Avoids copies, safe for substrings | `void log(std::string_view msg)` |

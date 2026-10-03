@@ -95,8 +95,11 @@ reached about 8.2 Mbps TX / 8.5 Mbps RX in half-duplex, and about 4.55 + 4.55
 Mbps of simultaneous TX and RX in full-duplex (raw Ethernet speed).
 
 The Ookla speed test for a connection flowing solely through the NIC attained
-~7.7 Mbps download and ~7.27 Mbps upload speed (including full network stack
-overhead).
+~7.7 Mbps download and ~7.27 Mbps upload speed (net of the full network stack
+overhead). This is close to the theoretical maximum TCP speed of 7.9-8.8 Mbps
+from above (which is a range rather than a single number because it depends on
+the amount of bit stuffing required in the USB layer, which is
+content-dependent).
 
 ![Speed test](doc/illustrations/2026-10-02_speedtest.png)
 

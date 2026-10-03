@@ -62,8 +62,8 @@ stricter goals compared to the prior art I am aware of.
 
 # Speed
 
-In a nutshell, the measured speed is about 9 Mbps of Ethernet traffic, close to
-the average theoretical maximum possible speed of CDC-NCM over USB 1.1 (~9.5
+In a nutshell, the measured speed is about 9.1 Mbps of Ethernet traffic, close
+to the average theoretical maximum possible speed of CDC-NCM over USB 1.1 (~9.5
 Mbps), and it is only capped by the host driver, not by the device nor
 firmware.
 

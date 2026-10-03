@@ -42,7 +42,7 @@ stricter goals compared to the prior art I am aware of.
 - No RX squelch of signals < 300 mV and > 585 mV and no standard-compliant
   noise rejection. Currently, only a squelch of signals < 400 mV is in place as
   part of the carrier detection mechanism.
-- The mandatory jabber detection is not implemented. In practice, however,
+- The mandatory jabber detection is not implemented. In practice, however, TX
   jabber cannot happen by design because the PIO stops when the buffer-sized
   DMA runs out.
 - No detection nor correction for inverted RX polarity (not mandatory by the

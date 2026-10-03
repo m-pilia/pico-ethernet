@@ -1,5 +1,7 @@
 # Pico 2 Ethernet NIC Emulation
 
+[![CI](https://github.com/m-pilia/pico-ethernet/actions/workflows/ci.yml/badge.svg)](https://github.com/m-pilia/pico-ethernet/actions/workflows/ci.yml)
+
 Technical demo of a 10BASE-T Ethernet NIC built on top of a Raspberry Pi Pico 2
 (RP2350) microcontroller, presented to a Linux host via USB as a [CDC-NCM
 device](https://en.wikipedia.org/wiki/Ethernet_over_USB).

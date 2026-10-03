@@ -40,7 +40,8 @@ stricter goals compared to the prior art I am aware of.
 - Tested on a ~30 m U/UTP Cat5e Ethernet cable. Not tested on a full 100 m
   cable run.
 - No RX squelch of signals < 300 mV and > 585 mV and no standard-compliant
-  noise rejection.
+  noise rejection. Currently, only a squelch of signals < 400 mV is in place as
+  part of the carrier detection mechanism.
 - The mandatory jabber detection is not implemented. In practice, however,
   jabber cannot happen by design because the PIO stops when the buffer-sized
   DMA runs out.

@@ -15,9 +15,10 @@
 #include "hardware/sync.h"
 
 #include "src/phy/phy_timing.h"
-#include "src/phy/rx_frame_recover.h"
+#include "src/phy/rx_frame_end.h"
 #include "src/phy/rx_pio_config.h"
 #include "src/phy/tx_level.h"
+#include "src/util/single_writer.h"
 
 #include "carrier_qualify.pio.h"
 #include "rx.pio.h"
@@ -85,23 +86,27 @@ Phy::Phy(std::uint32_t backoff_seed, const Pins& pins)
 bool Phy::initialize() {
     set_sys_clock_khz(SYS_CLOCK_HZ / 1000, true);
 
-    if (!pio_can_add_program(pio_, &tx_level_program) || !pio_can_add_program(pio_, &rx_manchester_program) ||
-        !pio_can_add_program(pio_, &carrier_qualify_program)) {
+    if (!pio_can_add_program(pio_, &tx_level_program) || !pio_can_add_program(pio_, &carrier_qualify_program) ||
+        !pio_can_add_program(rx_pio_, &rx_manchester_program) ||
+        !pio_can_add_program(rx_pio_, &tp_idl_watchdog_program)) {
         return false;
     }
     offset_tx_ = static_cast<std::uint32_t>(pio_add_program(pio_, &tx_level_program));
-    offset_rx_ = static_cast<std::uint32_t>(pio_add_program(pio_, &rx_manchester_program));
     offset_qualify_ = static_cast<std::uint32_t>(pio_add_program(pio_, &carrier_qualify_program));
+    offset_rx_ = static_cast<std::uint32_t>(pio_add_program(rx_pio_, &rx_manchester_program));
+    offset_watchdog_ = static_cast<std::uint32_t>(pio_add_program(rx_pio_, &tp_idl_watchdog_program));
 
     const std::int32_t smt{pio_claim_unused_sm(pio_, false)};
-    const std::int32_t smr{pio_claim_unused_sm(pio_, false)};
     const std::int32_t smq{pio_claim_unused_sm(pio_, false)};
-    if (smt < 0 || smr < 0 || smq < 0) {
+    const std::int32_t smr{pio_claim_unused_sm(rx_pio_, false)};
+    const std::int32_t smw{pio_claim_unused_sm(rx_pio_, false)};
+    if (smt < 0 || smq < 0 || smr < 0 || smw < 0) {
         return false;
     }
     sm_tx_ = static_cast<std::uint32_t>(smt);
-    sm_rx_ = static_cast<std::uint32_t>(smr);
     sm_qualify_ = static_cast<std::uint32_t>(smq);
+    sm_rx_ = static_cast<std::uint32_t>(smr);
+    sm_watchdog_ = static_cast<std::uint32_t>(smw);
 
     dma_tx_ = dma_claim_unused_channel(false);
     dma_rx_ = dma_claim_unused_channel(false);
@@ -166,9 +171,9 @@ void Phy::configure_rx() {
     gpio_init(pins_.rxd);
     gpio_init(pins_.rxc);
 
-    rx_cfg_ = rx_manchester_program_get_default_config(offset_rx_);
-    configure_rx_shift(rx_cfg_, pins_.rxd);
-    pio_sm_init(pio_, sm_rx_, offset_rx_, &rx_cfg_);
+    rx_cfg_ = rx_manchester_config(offset_rx_, pins_.rxd);
+    start_tp_idl_watchdog(rx_pio_, sm_watchdog_, offset_watchdog_, pins_.rxd);
+    enable_rx_sniffer(dma_rx_);
 }
 
 void Phy::configure_carrier_qualify() {
@@ -185,20 +190,9 @@ void Phy::configure_carrier_qualify() {
 }
 
 void __not_in_flash_func(Phy::rearm_capture)(std::size_t slot) {
-    pio_sm_set_enabled(pio_, sm_rx_, false);
-    pio_sm_clear_fifos(pio_, sm_rx_);
-    // Full reset: PC back to the carrier-gate at the program start and the ISR
-    // shift counter cleared, so the next frame's octets are byte-aligned.
-    pio_sm_init(pio_, sm_rx_, offset_rx_, &rx_cfg_);
-
-    dma_channel_config c{dma_channel_get_default_config(dma_rx_)};
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
-    channel_config_set_read_increment(&c, false);
-    channel_config_set_write_increment(&c, true);
-    channel_config_set_dreq(&c, pio_get_dreq(pio_, sm_rx_, false));
-    dma_channel_configure(dma_rx_, &c, rx_pool_[slot].data(), &pio_->rxf[sm_rx_], RX_WORD_CAPACITY, true);
-
-    pio_sm_set_enabled(pio_, sm_rx_, true);
+    restart_rx(rx_pio_, sm_rx_, offset_rx_, rx_cfg_);
+    start_rx_capture(dma_rx_, rx_pio_, sm_rx_, rx_pool_[slot]);
+    pio_sm_set_enabled(rx_pio_, sm_rx_, true);
 }
 
 void __not_in_flash_func(Phy::carrier_irq_handler)(uint gpio, std::uint32_t events) {
@@ -226,6 +220,7 @@ void __not_in_flash_func(Phy::carrier_qualified_irq_handler)() {
 
 void __not_in_flash_func(Phy::on_carrier_qualified)() {
     pio_interrupt_clear(pio_, sm_qualify_);
+    carrier_qualified_.store(true, std::memory_order_relaxed);
 
     // A peer transmitting while we are is a collision -- and only the first one of
     // an attempt is. The flag can still arrive after on_tx_complete() has disabled
@@ -255,61 +250,66 @@ void __not_in_flash_func(Phy::on_collision)() {
 void __not_in_flash_func(Phy::on_rx_eof)() {
     // RXC is high again: a dip in the carrier envelope, or the next frame's carrier
     // already rising by the time this handler runs. The two look the same here, so
-    // the capture goes on; in the second case the next frame is merged into it and
-    // lost.
+    // the capture goes on. A frame that already ended on TP_IDL waits, finished, for
+    // the next carrier's end, and the frame in that carrier is lost.
     if (gpio_get(pins_.rxc)) {
         return;
     }
     note_medium_free();
 
-    // The RX SM has stalled on the missing edges and DMA has drained every complete
-    // word, so the remaining count is stable and readable without stopping the DMA.
-    const std::uint32_t remaining_before{dma_channel_hw_addr(dma_rx_)->transfer_count};
-    const std::size_t words_before{RX_WORD_CAPACITY - remaining_before};
+    const bool frame_ended{pio_interrupt_get(rx_pio_, RX_DONE_FLAG)};
+    const bool qualified{
+        pio_interrupt_get(pio_, sm_qualify_) || carrier_qualified_.exchange(false, std::memory_order_relaxed)};
+    pio_interrupt_clear(pio_, sm_qualify_);
 
-    // A carrier blip that decoded nothing is a link pulse, or line noise the pulse
-    // decoder rejects.
-    if (words_before == 0) {
-        on_link_pulse();
+    // The RX SM has stalled and DMA has drained every complete word, so the
+    // remaining count is stable and readable without stopping the DMA.
+    const std::size_t landed{RX_WORD_CAPACITY - dma_channel_hw_addr(dma_rx_)->transfer_count};
+
+    // No SFD: the SM pushes nothing before it, and a frame that ends on TP_IDL
+    // pushes at least its padded last word. A carrier blip is a link pulse, or line
+    // noise the pulse decoder rejects; a carrier that outlasted one is a glitch.
+    if (!frame_ended && landed == 0) {
+        if (qualified) {
+            increment_single_writer(rx_glitches_);
+            increment_single_writer(rx_captures_);
+        } else {
+            on_link_pulse();
+        }
         discard_capture();
         return;
     }
 
     // A frame received while the link is down counts, and can restore the link, but
     // is not delivered: it arrived under the link state the loop last published.
-    rx_captures_.store(rx_captures_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+    increment_single_writer(rx_captures_);
     if (!link_up_mirror_.load(std::memory_order_relaxed)) {
         discard_capture();
         return;
     }
 
-    // The frame's final FCS octet(s) may sit in the RX ISR below the 32-bit autopush
-    // threshold (the line goes idle after the FCS, so no trailing edges flush the
-    // word). Push the residual through to the DMA before stopping it, otherwise every
-    // frame loses its FCS tail and fails validation.
-    //
-    // Only when the DMA still has a landing slot. If the capture ran the buffer full
-    // (remaining_before == 0, i.e. words_before == capacity), the DMA is finished, the
-    // SM has filled the RX FIFO with no drain, and forcing another autopush would stall
-    // the SM on a full FIFO forever -- flush_rx_isr blocks on that exec, hanging the
-    // end-of-frame interrupt. An over-length capture is a discarded giant anyway, so
-    // skip the flush and let it be rejected.
-    if (words_before < RX_WORD_CAPACITY) {
-        flush_rx_isr(pio_, sm_rx_);
-        while (!pio_sm_is_rx_fifo_empty(pio_, sm_rx_) && dma_channel_hw_addr(dma_rx_)->transfer_count != 0) {
-            tight_loop_contents(); // let the DMA carry the flushed word into the buffer
-        }
+    // A capture that ran the buffer full is a giant whether or not it reached
+    // TP_IDL; the drain tells it by its length. Any other one that did not reach
+    // TP_IDL lost its carrier mid-frame.
+    if (!frame_ended && landed < RX_WORD_CAPACITY) {
+        increment_single_writer(rx_truncated_);
+        discard_capture();
+        return;
     }
 
-    // Read while the channel is still live, which the flush has left stable: an
-    // aborted channel reports no transfers remaining, whatever it had left to do.
-    const std::uint32_t remaining{dma_channel_hw_addr(dma_rx_)->transfer_count};
+    while (!pio_sm_is_rx_fifo_empty(rx_pio_, sm_rx_) && dma_channel_hw_addr(dma_rx_)->transfer_count != 0) {
+        tight_loop_contents(); // let the DMA carry the padded last word into the buffer
+    }
+
+    // Read while the channel is still live: an aborted channel reports no transfers
+    // remaining, whatever it had left to do.
+    const std::size_t words{RX_WORD_CAPACITY - dma_channel_hw_addr(dma_rx_)->transfer_count};
+    const std::uint32_t crc{dma_sniffer_get_data_accumulator()};
     abort_dma_channel(dma_rx_);
-    const std::size_t words{RX_WORD_CAPACITY - remaining};
 
     // Hand the DMA a free buffer for the next frame and queue this one for the
-    // main-loop drain. No parsing or copying here -- that is the drain's job.
-    rearm_capture(rx_ring_.publish(words));
+    // main-loop drain.
+    rearm_capture(rx_ring_.publish(words, crc));
 }
 
 void __not_in_flash_func(Phy::discard_capture)() {
@@ -323,7 +323,7 @@ void __not_in_flash_func(Phy::on_link_pulse)() {
         case LinkPulseEvent::Kind::None:
             return;
         case LinkPulseEvent::Kind::ValidNlp:
-            valid_nlps_.store(valid_nlps_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+            increment_single_writer(valid_nlps_);
             return;
         case LinkPulseEvent::Kind::CodeWord: {
             const std::uint32_t sequence{
@@ -343,25 +343,14 @@ Phy::RxFrame Phy::poll_rx() {
         return {};
     }
 
-    // The DMA'd words pack four recovered octets each, LSB-first, so on this
-    // little-endian core the capture buffer holds the octet stream in order.
-    // recover_frame() re-aligns and FCS-delimits it in one pass -- the carrier gate
-    // started the decoder mid-preamble, so its octet boundaries are bit-offset from
-    // the frame's.
-    const std::span<const std::uint8_t> raw{
-        std::span{rx_pool_[done->slot]}.first(done->word_count * RX_OCTETS_PER_WORD)};
-    const std::expected<std::size_t, FrameError> recovered{recover_frame(raw, rx_frame_)};
-    rx_ring_.release();
-
-    if (!recovered) {
-        // No SFD means the carrier carried no decodable frame (idle noise or a
-        // partial capture); the remaining errors are captured-but-rejected frames.
-        if (recovered.error() == FrameError::BadPreamble) {
-            return {.kind = RxFrame::Kind::Glitch};
-        }
-        return {.kind = RxFrame::Kind::Error, .error = recovered.error()};
+    // The DMA'd words pack four frame-aligned octets each, LSB-first, so on this
+    // little-endian core the capture buffer holds the frame in order.
+    const std::expected<std::size_t, FrameError> length{
+        find_frame_end(done->word_count * RX_OCTETS_PER_WORD, done->crc)};
+    if (!length) {
+        return {.kind = RxFrame::Kind::Error, .error = length.error()};
     }
-    return {.kind = RxFrame::Kind::Frame, .frame = std::span<const std::uint8_t>{rx_frame_}.first(*recovered)};
+    return {.kind = RxFrame::Kind::Frame, .frame = std::span<const std::uint8_t>{rx_pool_[done->slot]}.first(*length)};
 }
 
 WireFrame* Phy::tx_slot() {
@@ -568,8 +557,7 @@ void __not_in_flash_func(Phy::on_tx_complete)() {
 
     // A collided attempt ends in a jam, not a frame: it is neither sent nor underrun.
     if (!collided_.load(std::memory_order_relaxed)) {
-        std::atomic<std::uint32_t>& outcome{underrun ? tx_underrun_ : tx_sent_};
-        outcome.store(outcome.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+        increment_single_writer(underrun ? tx_underrun_ : tx_sent_);
     }
 
     pio_set_irqn_source_enabled(pio_, QUALIFY_IRQ_INDEX, sm_interrupt_source(sm_qualify_), false);
@@ -627,7 +615,7 @@ std::uint32_t __not_in_flash_func(Phy::emit_link_pulses)() {
         return *next_us;
     }
     flp_burst_.reset();
-    flp_bursts_sent_.store(flp_bursts_sent_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+    increment_single_writer(flp_bursts_sent_);
     return FLP_BURST_PERIOD_US - FLP_BURST_US;
 }
 

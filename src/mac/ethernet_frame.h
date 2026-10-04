@@ -33,12 +33,11 @@ inline constexpr std::size_t MAX_FRAME_WITH_FCS{MAX_FRAME_NO_FCS + FCS_LEN};
 inline constexpr std::size_t WIRE_CAPACITY{PREAMBLE_SFD_LEN + MAX_FRAME_WITH_FCS};
 
 enum class FrameError : std::uint8_t {
-    TooLong,     // TX: host frame exceeds MAX_FRAME_NO_FCS
-    BadPreamble, // RX: no valid preamble/SFD prefix
-    Runt,        // RX: shorter than MIN_FRAME_WITH_FCS
-    Giant,       // RX: longer than MAX_FRAME_WITH_FCS
-    BadFcs,      // RX: FCS does not match the frame contents
-    Filtered,    // RX: destination address rejected by the filter
+    TooLong,  // TX: host frame exceeds MAX_FRAME_NO_FCS
+    Runt,     // RX: shorter than MIN_FRAME_WITH_FCS
+    Giant,    // RX: longer than MAX_FRAME_WITH_FCS
+    BadFcs,   // RX: FCS does not match the frame contents
+    Filtered, // RX: destination address rejected by the filter
 };
 
 // The canonical in-memory representation: a full wire frame

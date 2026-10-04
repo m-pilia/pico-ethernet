@@ -51,16 +51,15 @@ SELECTORS = {
     0x1D: "xmit_late_collisions",
     # Private diagnostic selectors: the internal RX sub-counters that make up
     # rcv_error, and the link events (see Diagnostic in src/phy/phy_stats.h).
-    0xF0: "  bad_preamble",
-    0xF1: "  runt",
-    0xF2: "  giant",
-    0xF3: "  bad_fcs",
-    0xF4: "  carrier_glitch",
-    0xF5: "  decode_error",
-    0xF6: "  pool_overflow",
-    0xF7: "  host_backpressure",
-    0xF8: "  link_down_dropped",
-    0xF9: "  link_transitions",
+    0xF0: "  runt",
+    0xF1: "  giant",
+    0xF2: "  bad_fcs",
+    0xF3: "  carrier_glitch",
+    0xF4: "  truncated",
+    0xF5: "  pool_overflow",
+    0xF6: "  host_backpressure",
+    0xF7: "  link_down_dropped",
+    0xF8: "  link_transitions",
 }
 
 CDC_COMMUNICATIONS_CLASS = 0x02

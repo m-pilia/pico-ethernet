@@ -29,9 +29,9 @@ stricter goals compared to the prior art I am aware of.
 * Own design and implementation of the PHY, no external hardware or software
   solution.
 * Efficient implementation with minimal resources. Core 1 is completely unused,
-  and so are PIO 1 and 2, 14 out of the 16 DMA channels, 3 out of 4 DMA
-  interrupt lines, and most of the memory. There is room to comfortably run a
-  non-trivial second application in parallel on the Pico.
+  and so are PIO 2, 14 out of the 16 DMA channels, 3 out of 4 DMA interrupt
+  lines, and most of the memory. There is room to comfortably run a non-trivial
+  second application in parallel on the Pico.
 * Quality firmware implementation following best practices.
 
 # Status
@@ -59,6 +59,7 @@ stricter goals compared to the prior art I am aware of.
 - TinyUSB's CDC-NCM reports 12 Mbps connection speed (USB 1.1 full-speed)
   and currently it does not support reporting the actual 10BASE-T's 10 Mbps.
 - No support to override the MAC address from host (TinyUSB limitation).
+- Dribble bits are not tolerated and treated as a bad FCS.
 
 # Speed
 
@@ -94,7 +95,7 @@ or drain RX frames fast enough). Testing on different USB controllers (even on
 the same machine) consistently attained different speeds for this reason.
 
 Connected to an ASMedia ASM1143 USB 3.1 controller, the pico-ethernet NIC
-reached about 8.2 Mbps TX / 8.5 Mbps RX in half-duplex, and about 4.55 + 4.55
+reached about 8.2 Mbps TX / 8.75 Mbps RX in half-duplex, and about 4.55 + 4.55
 Mbps of simultaneous TX and RX in full-duplex (raw Ethernet speed).
 
 The Ookla speed test for a connection flowing solely through the NIC attained

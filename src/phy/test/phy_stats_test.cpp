@@ -13,14 +13,12 @@ namespace {
 
 TEST(RxStatsTest, RecordErrorIncrementsMatchingField) {
     RxStats stats{};
-    stats.record_error(FrameError::BadPreamble);
     stats.record_error(FrameError::Runt);
     stats.record_error(FrameError::Giant);
     stats.record_error(FrameError::BadFcs);
     stats.record_error(FrameError::BadFcs);
     stats.record_error(FrameError::Filtered);
 
-    EXPECT_EQ(stats.bad_preamble, 1u);
     EXPECT_EQ(stats.runt, 1u);
     EXPECT_EQ(stats.giant, 1u);
     EXPECT_EQ(stats.bad_fcs, 2u);
@@ -37,14 +35,13 @@ TEST(RxStatsTest, ErrorTotalExcludesFilteredAndDelivered) {
     RxStats stats{};
     stats.delivered = 10;
     stats.filtered = 3;
-    stats.bad_preamble = 1;
     stats.runt = 2;
     stats.giant = 1;
     stats.bad_fcs = 4;
-    stats.decode_error = 5;
     stats.carrier_glitch = 6;
+    stats.truncated = 5;
 
-    EXPECT_EQ(stats.error_total(), 1u + 2u + 1u + 4u + 5u + 6u);
+    EXPECT_EQ(stats.error_total(), 2u + 1u + 4u + 6u + 5u);
 }
 
 TEST(EthernetStatisticTest, SelectorsMapToTheRightCounters) {
@@ -53,7 +50,7 @@ TEST(EthernetStatisticTest, SelectorsMapToTheRightCounters) {
     rx.delivered = 11;
     rx.bad_fcs = 4;
     rx.runt = 1;
-    rx.decode_error = 2;
+    rx.truncated = 2;
     const CsmaStats csma{
         .deferred = 9,
         .single_collision = 5,
@@ -79,9 +76,11 @@ TEST(EthernetStatisticTest, SelectorsMapToTheRightCounters) {
 TEST(EthernetStatisticTest, DiagnosticSelectorsMapToTheRightCounters) {
     RxStats rx{};
     rx.carrier_glitch = 6;
+    rx.truncated = 3;
     const CsmaStats csma{.link_down_dropped = 4, .link_transitions = 8};
 
     EXPECT_EQ(ethernet_statistic(static_cast<std::uint16_t>(Diagnostic::CarrierGlitch), TxStats{}, rx, csma), 6u);
+    EXPECT_EQ(ethernet_statistic(static_cast<std::uint16_t>(Diagnostic::Truncated), TxStats{}, rx, csma), 3u);
     EXPECT_EQ(ethernet_statistic(static_cast<std::uint16_t>(Diagnostic::LinkDownDropped), TxStats{}, rx, csma), 4u);
     EXPECT_EQ(ethernet_statistic(static_cast<std::uint16_t>(Diagnostic::LinkTransitions), TxStats{}, rx, csma), 8u);
 }

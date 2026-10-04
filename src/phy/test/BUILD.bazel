@@ -38,14 +38,13 @@ cc_test(
 )
 
 cc_test(
-    name = "rx_frame_recover_test",
-    srcs = ["rx_frame_recover_test.cpp"],
+    name = "rx_frame_end_test",
+    srcs = ["rx_frame_end_test.cpp"],
     deps = [
-        "@googletest//:gtest",
         "@googletest//:gtest_main",
+        "//src/mac:crc32",
         "//src/mac:ethernet_frame",
-        "//src/mac/test:frame_builder_by_value",
-        "//src/phy:rx_frame_recover",
+        "//src/phy:rx_frame_end",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )
@@ -117,6 +116,22 @@ pico_generate_pio_header(
     srcs = ["rx_stimulus.pio"],
 )
 
+cc_library(
+    name = "rx_stimulus",
+    testonly = True,
+    hdrs = ["rx_stimulus.h"],
+    deps = [
+        ":rx_stimulus_pio",
+        ":tx_reference",
+        "//src/mac:ethernet_frame",
+        "//src/mac:frame_builder",
+        "//src/phy:tx_level",
+        "@pico-sdk//src/rp2_common/hardware_dma",
+        "@pico-sdk//src/rp2_common/hardware_pio",
+    ],
+    target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
+)
+
 pico_generate_pio_header(
     name = "pin_capture_pio",
     srcs = ["pin_capture.pio"],
@@ -175,15 +190,12 @@ cc_binary(
     linkopts = ["-Wl,--gc-sections"],
     target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
     deps = [
-        ":rx_stimulus_pio",
+        ":rx_stimulus",
         ":tx_reference",
+        "//src/mac:crc32",
         "//src/mac:ethernet_frame",
-        "//src/mac:frame_filter",
-        "//src/mac:mac_address",
-        "//src/mac/test:frame_builder_by_value",
-        "//src/mac/test:frame_parser",
         "//src/phy:phy_timing",
-        "//src/phy:rx_frame_recover",
+        "//src/phy:rx_frame_end",
         "//src/phy:rx_pio",
         "//src/phy:rx_pio_config",
         "//src/phy:tx_level",
@@ -225,6 +237,7 @@ cc_binary(
     deps = [
         ":phy_harness",
         ":pin_capture",
+        ":rx_stimulus",
         ":symbol_trace",
         ":tx_reference",
         "//src/mac:ethernet_frame",

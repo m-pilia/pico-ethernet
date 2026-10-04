@@ -30,12 +30,11 @@ DEVICE_COUNTERS = (
     # RX aggregate + per-error sub-counters (Diagnostic in src/phy/phy_stats.h)
     "rcv_ok",
     "rcv_error",
-    "bad_preamble",
     "runt",
     "giant",
     "bad_fcs",
     "carrier_glitch",
-    "decode_error",
+    "truncated",
     "pool_overflow",
     "host_backpressure",
 )

@@ -30,6 +30,10 @@ inline constexpr std::uint32_t TP_IDL_MIN_NS{250};
 inline constexpr std::uint32_t TP_IDL_NS{300};
 static_assert(TP_IDL_NS >= TP_IDL_MIN_NS);
 
+// A receiver takes a high run this long for the start of TP_IDL: midway between the
+// longest high in Manchester data (a 1 followed by a 0) and the shortest TP_IDL.
+inline constexpr std::uint32_t TP_IDL_DETECT_NS{(BIT_TIME_NS + TP_IDL_MIN_NS) / 2};
+
 // The truncation point of the binary exponential backoff: after the n-th collision
 // the draw spans [0, 2^min(n, BACKOFF_TRUNCATION) - 1] slot times.
 inline constexpr std::uint32_t BACKOFF_TRUNCATION{10};

@@ -41,29 +41,25 @@ struct CsmaStats {
     std::uint32_t link_transitions{0};     // link up/down changes reported to the host
 };
 
-// Receive-side counters. The per-FrameError fields come out of the MAC parser
-// unchanged; decode_error and carrier_glitch are PHY-level events with no MAC
-// equivalent (a Manchester code violation, and carrier that never yielded a
-// deliverable frame). All fields are written only on the main loop and read by the
+// Receive-side counters. The per-FrameError fields come out of the MAC checks
+// unchanged; carrier_glitch and truncated are PHY-level events with no MAC
+// equivalent (a carrier that never showed an SFD, and a frame whose carrier dropped
+// without TP_IDL). All fields are written only on the main loop and read by the
 // USB ISR (GET_ETHERNET_STATISTIC); single-writer aligned 32-bit access needs no
 // lock (see TxStats).
 struct RxStats {
     std::uint32_t delivered{0};
-    std::uint32_t bad_preamble{0};
     std::uint32_t runt{0};
     std::uint32_t giant{0};
     std::uint32_t bad_fcs{0};
     std::uint32_t filtered{0};
-    std::uint32_t decode_error{0};
     std::uint32_t carrier_glitch{0};
+    std::uint32_t truncated{0};
     std::uint32_t pool_overflow{0};     // buffer pool exhausted; frame dropped under load
     std::uint32_t host_backpressure{0}; // USB TX busy (frame did not fit the current NCM NTB)
 
     constexpr void record_error(FrameError error) {
         switch (error) {
-            case FrameError::BadPreamble:
-                ++bad_preamble;
-                break;
             case FrameError::Runt:
                 ++runt;
                 break;
@@ -84,8 +80,7 @@ struct RxStats {
     // Frames dropped because of a corruption/decode fault. Filtered frames are an
     // intentional drop (not addressed to us), not an error, so they are excluded.
     [[nodiscard]] constexpr std::uint32_t error_total() const {
-        return bad_preamble + runt + giant + bad_fcs + decode_error + carrier_glitch + pool_overflow +
-               host_backpressure;
+        return runt + giant + bad_fcs + carrier_glitch + truncated + pool_overflow + host_backpressure;
     }
 };
 
@@ -175,23 +170,20 @@ ethernet_statistic(EthernetStatistic selector, const TxStats& tx, const RxStats&
 // advertised at all. No conformant host issues an unadvertised selector, and every
 // unknown one is still stalled.
 enum class Diagnostic : std::uint16_t {
-    BadPreamble = 0xF0,
-    Runt = 0xF1,
-    Giant = 0xF2,
-    BadFcs = 0xF3,
-    CarrierGlitch = 0xF4,
-    DecodeError = 0xF5,
-    PoolOverflow = 0xF6,
-    HostBackpressure = 0xF7,
-    LinkDownDropped = 0xF8,
-    LinkTransitions = 0xF9,
+    Runt = 0xF0,
+    Giant = 0xF1,
+    BadFcs = 0xF2,
+    CarrierGlitch = 0xF3,
+    Truncated = 0xF4,
+    PoolOverflow = 0xF5,
+    HostBackpressure = 0xF6,
+    LinkDownDropped = 0xF7,
+    LinkTransitions = 0xF8,
 };
 
 [[nodiscard]] constexpr std::optional<std::uint32_t>
 diagnostic(std::uint16_t selector, const RxStats& rx, const CsmaStats& csma) {
     switch (static_cast<Diagnostic>(selector)) {
-        case Diagnostic::BadPreamble:
-            return rx.bad_preamble;
         case Diagnostic::Runt:
             return rx.runt;
         case Diagnostic::Giant:
@@ -200,8 +192,8 @@ diagnostic(std::uint16_t selector, const RxStats& rx, const CsmaStats& csma) {
             return rx.bad_fcs;
         case Diagnostic::CarrierGlitch:
             return rx.carrier_glitch;
-        case Diagnostic::DecodeError:
-            return rx.decode_error;
+        case Diagnostic::Truncated:
+            return rx.truncated;
         case Diagnostic::PoolOverflow:
             return rx.pool_overflow;
         case Diagnostic::HostBackpressure:

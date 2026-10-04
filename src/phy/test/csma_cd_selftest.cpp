@@ -3,13 +3,15 @@
 //
 // On-target automated self-test for the half-duplex link: carrier-sense deferral,
 // collision abort and jam, backoff, the late-collision drop, carrier qualification,
-// and link integrity. It drives the production PHY with its receive inputs moved to
-// a free pin pair, so a carrier can be injected from the CPU at a chosen instant
-// without fighting the comparators; transmission stays on the real pads, observed at
-// full speed by a capture state machine. The peer only sends NLPs, so the link comes
-// up half duplex by parallel detection. Results are reported over the UART
-// (debugprobe console).
+// link integrity, and how the end of a carrier is classified. It drives the
+// production PHY with its receive inputs moved to a free pin pair, so a carrier can
+// be injected from the CPU at a chosen instant without fighting the comparators, and
+// frames from a stimulus state machine; transmission stays on the real pads,
+// observed at full speed by a capture state machine. The peer only sends NLPs, so
+// the link comes up half duplex by parallel detection. Results are reported over the
+// UART (debugprobe console).
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <cstddef>
@@ -28,6 +30,7 @@
 #include "src/phy/phy_timing.h"
 #include "src/phy/test/phy_harness.h"
 #include "src/phy/test/pin_capture.h"
+#include "src/phy/test/rx_stimulus.h"
 #include "src/phy/test/symbol_trace.h"
 #include "src/phy/test/tx_reference.h"
 #include "src/phy/tx_level.h"
@@ -82,6 +85,12 @@ static_assert(TEST_FRAME_US > LATE_COLLISION_AT_US + CARRIER_HOLD_US);
 // A carrier that drops inside the qualification window, as a link pulse and the RC
 // tail of the carrier detect do.
 constexpr std::uint32_t SHORT_CARRIER_US{CARRIER_QUALIFY_US / 2};
+
+// A carrier that qualifies, but carries no symbols.
+constexpr std::uint32_t LONG_CARRIER_US{2 * CARRIER_QUALIFY_US};
+
+// A received frame (destination..FCS) whose last word the RX SM has to pad.
+constexpr std::size_t RX_FRAME_LEN{MIN_FRAME_WITH_FCS + 1};
 
 // Parallel detection only completes once break_link and then autoneg_wait have run
 // out, with the peer's NLPs arriving throughout.
@@ -439,6 +448,116 @@ bool check_short_carrier_is_not_a_collision(Phy& phy, PeerLink& peer, std::uint3
     return true;
 }
 
+// What the end of a carrier has to leave behind: the counters it may move, and
+// whether it queued a frame. Link pulses count as no activity.
+struct CarrierEnd {
+    std::uint32_t activity;
+    std::uint32_t glitches;
+    std::uint32_t truncated;
+    bool queued;
+};
+
+CarrierEnd carrier_end(const Phy& phy) {
+    return {
+        .activity = phy.wire_activity(),
+        .glitches = phy.rx_glitches(),
+        .truncated = phy.rx_truncated(),
+        .queued = phy.rx_pending()};
+}
+
+bool check_carrier_end(
+    const char* what,
+    const CarrierEnd& before,
+    const CarrierEnd& after,
+    const CarrierEnd& expected) {
+    const CarrierEnd moved{
+        .activity = after.activity - before.activity,
+        .glitches = after.glitches - before.glitches,
+        .truncated = after.truncated - before.truncated,
+        .queued = after.queued};
+    if (moved.activity != expected.activity || moved.glitches != expected.glitches ||
+        moved.truncated != expected.truncated || moved.queued != expected.queued) {
+        printf(
+            "FAIL: %s: activity +%" PRIu32 ", glitches +%" PRIu32 ", truncated +%" PRIu32 ", queued %d\n",
+            what,
+            moved.activity,
+            moved.glitches,
+            moved.truncated,
+            moved.queued ? 1 : 0);
+        return false;
+    }
+    return true;
+}
+
+// Plays `waveform` onto RXD under a carrier held for its whole length, as a peer's
+// frame arrives.
+void receive(PeerLink& peer, RxStimulus& stimulus, const RxWaveform& waveform) {
+    peer.set_carrier(true);
+    stimulus.play(waveform);
+    busy_wait_us(RX_SETTLE_US);
+    peer.set_carrier(false);
+}
+
+bool check_short_carrier_is_link_pulse(Phy& phy, PeerLink& peer) {
+    const CarrierEnd before{carrier_end(phy)};
+    peer.pulse_carrier(SHORT_CARRIER_US);
+    return check_carrier_end(
+        "short carrier", before, carrier_end(phy), {.activity = 0, .glitches = 0, .truncated = 0, .queued = false});
+}
+
+bool check_long_carrier_without_sfd_is_glitch(Phy& phy, PeerLink& peer) {
+    const CarrierEnd before{carrier_end(phy)};
+    peer.set_carrier(true);
+    busy_wait_us(LONG_CARRIER_US);
+    peer.set_carrier(false);
+    return check_carrier_end(
+        "long carrier without SFD",
+        before,
+        carrier_end(phy),
+        {.activity = 1, .glitches = 1, .truncated = 0, .queued = false});
+}
+
+bool check_frame_without_tp_idl_is_truncated(Phy& phy, PeerLink& peer, RxStimulus& stimulus) {
+    static RxWaveform waveform{};
+    const CarrierEnd before{carrier_end(phy)};
+    receive(peer, stimulus, waveform.clear().octets(test_frame(RX_FRAME_LEN, true).view()));
+    return check_carrier_end(
+        "frame without TP_IDL",
+        before,
+        carrier_end(phy),
+        {.activity = 1, .glitches = 0, .truncated = 1, .queued = false});
+}
+
+bool check_frame_is_delivered(Phy& phy, PeerLink& peer, RxStimulus& stimulus) {
+    static RxWaveform waveform{};
+    const WireFrame& wire{test_frame(RX_FRAME_LEN, true)};
+    const CarrierEnd before{carrier_end(phy)};
+    receive(peer, stimulus, waveform.clear().transmission(wire.view()));
+    if (!check_carrier_end(
+            "frame", before, carrier_end(phy), {.activity = 1, .glitches = 0, .truncated = 0, .queued = true})) {
+        return false;
+    }
+
+    const Phy::RxFrame received{phy.poll_rx()};
+    const std::span<const std::uint8_t> sent{wire.view().subspan(PREAMBLE_SFD_LEN)};
+    const bool delivered{received.kind == Phy::RxFrame::Kind::Frame && std::ranges::equal(received.frame, sent)};
+    if (received.kind != Phy::RxFrame::Kind::None) {
+        phy.release_rx();
+    }
+    if (!delivered) {
+        printf(
+            "FAIL: the frame was not delivered whole: kind %d, %" PRIu32 " octets\n",
+            static_cast<int>(received.kind),
+            static_cast<std::uint32_t>(received.frame.size()));
+        return false;
+    }
+    if (phy.rx_pending()) {
+        printf("FAIL: the frame stayed queued after release_rx()\n");
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool run_selftest() {
@@ -449,13 +568,14 @@ bool run_selftest() {
 
     static Phy phy{BACKOFF_SEED, TEST_PINS};
     static Capture capture{};
+    static RxStimulus stimulus{};
     bool ok{phy.initialize()};
     if (!ok) {
         printf("FAIL: the PHY could not claim its PIO and DMA resources\n");
     }
-    ok = ok && capture.configure(pio0, TEST_PINS.txp);
+    ok = ok && capture.configure(pio0, TEST_PINS.txp) && stimulus.configure(pio0, TEST_PINS.rxd);
     if (!ok) {
-        printf("FAIL: could not claim the capture state machine or DMA channel\n");
+        printf("FAIL: could not claim the capture and stimulus state machines and DMA channels\n");
     }
 
     if (ok) {
@@ -480,6 +600,12 @@ bool run_selftest() {
         ok = check_short_carrier_is_not_a_collision(phy, peer, COLLISION_AT_US) && ok;
         drain(phy, peer);
         ok = check_short_carrier_is_not_a_collision(phy, peer, LATE_COLLISION_AT_US) && ok;
+
+        drain(phy, peer);
+        ok = check_short_carrier_is_link_pulse(phy, peer) && ok;
+        ok = check_long_carrier_without_sfd_is_glitch(phy, peer) && ok;
+        ok = check_frame_without_tp_idl_is_truncated(phy, peer, stimulus) && ok;
+        ok = check_frame_is_delivered(phy, peer, stimulus) && ok;
     }
 
     printf("csma_cd_selftest: %s\n", ok ? "PASS" : "FAIL");

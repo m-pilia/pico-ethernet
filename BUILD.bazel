@@ -12,11 +12,10 @@ refresh_compile_commands(
         "//src/mac/test:ethernet_frame_test": "",
         "//src/mac/test:frame_builder_test": "",
         "//src/mac/test:frame_filter_test": "",
-        "//src/mac/test:frame_parser_test": "",
         "//src/mac/test:mac_address_test": "",
         "//src/phy/test:link_pulse_test": "",
         "//src/phy/test:phy_stats_test": "",
-        "//src/phy/test:rx_frame_align_test": "",
+        "//src/phy/test:rx_frame_end_test": "",
         "//src/phy/test:tx_reference_test": "",
     },
 )

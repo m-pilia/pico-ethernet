@@ -1,22 +1,9 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
-    name = "frame_parser",  # firmware-unused; kept as a test-only parser oracle
-    testonly = True,
-    hdrs = ["frame_parser.h"],
-    visibility = ["//src/phy/test:__pkg__"],
-    deps = [
-        "//src/mac:crc32",
-        "//src/mac:ethernet_frame",
-        "//src/mac:frame_filter",
-    ],
-)
-
-cc_library(
     name = "frame_builder_by_value",
     testonly = True,
     hdrs = ["frame_builder_by_value.h"],
-    visibility = ["//src/phy/test:__pkg__"],
     deps = [
         "//src/mac:ethernet_frame",
         "//src/mac:frame_builder",
@@ -86,21 +73,6 @@ cc_test(
         "@googletest//:gtest_main",
         "//src/mac:frame_filter",
         "//src/mac:mac_address",
-    ],
-    target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
-)
-
-cc_test(
-    name = "frame_parser_test",
-    srcs = ["frame_parser_test.cpp"],
-    deps = [
-        "@googletest//:gtest",
-        "@googletest//:gtest_main",
-        "//src/mac:ethernet_frame",
-        "//src/mac:frame_filter",
-        "//src/mac:mac_address",
-        ":frame_builder_by_value",
-        ":frame_parser",
     ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:host"],
 )

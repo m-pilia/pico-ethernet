@@ -92,13 +92,14 @@ void UsbNetDevice::task() {
 
     // Mirror the interrupt-maintained PHY counters into the stats.
     rx_stats_.pool_overflow = phy_.rx_pool_overflow();
+    rx_stats_.carrier_glitch = phy_.rx_glitches();
+    rx_stats_.truncated = phy_.rx_truncated();
     stats_.sent = phy_.tx_sent();
     stats_.underrun = phy_.tx_underrun();
 
-    // Drain recovered frames to the host, letting the NCM driver aggregate several
-    // datagrams into one NTB per USB transfer. recover_frame (bit realignment + CRC
-    // scan) is the costly part, so gate each recovery on being able to hand the frame
-    // to USB right now; stop as soon as the NTB path is full or the pool is empty.
+    // Drain received frames to the host, letting the NCM driver aggregate several
+    // datagrams into one NTB per USB transfer. Gate each frame on being able to hand
+    // it to USB right now; stop as soon as the NTB path is full or the pool is empty.
     // Frames left in the pool are dropped cheaply in the capture interrupt
     // (pool_overflow).
     //
@@ -120,12 +121,11 @@ void UsbNetDevice::task() {
         switch (received.kind) {
             case Phy::RxFrame::Kind::Frame:
                 deliver_to_host(received.frame);
-                break;
-            case Phy::RxFrame::Kind::Glitch:
-                ++rx_stats_.carrier_glitch;
+                phy_.release_rx();
                 break;
             case Phy::RxFrame::Kind::Error:
                 rx_stats_.record_error(received.error);
+                phy_.release_rx();
                 break;
             case Phy::RxFrame::Kind::None:
                 break; // rx_pending() was true and we are the sole consumer, so unreachable

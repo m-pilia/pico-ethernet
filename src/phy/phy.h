@@ -29,13 +29,14 @@ namespace pico_ethernet {
 
 // Software 10BASE-T PHY. Transmit: serializes complete MAC wire frames as
 // Manchester symbols on the differential pair {TXP, TXN} using one PIO state
-// machine fed by DMA, and emits link pulses when the line is idle. Receive:
-// a second PIO SM slices the RXD/RXC comparator outputs back into octets via DMA
-// into a pool of capture buffers; the
-// RXC falling edge (end of frame) is finalized in an interrupt that hands the DMA
-// the next free buffer, and poll_rx() drains and recovers completed frames from the
-// main loop. The system clock is run at 120 MHz so a 50 ns half-bit is an exact 6
-// PIO cycles.
+// machine fed by DMA, and emits link pulses when the line is idle. Receive: on a
+// PIO block of its own, an SM slices the RXD/RXC comparator outputs back into the
+// frame's octets, from its SFD to its TP_IDL, which a second SM detects. DMA lands
+// them in a pool of capture buffers, and the DMA CRC sniffer computes their FCS on
+// the way. The RXC falling edge (end of carrier) is finalized in an interrupt that
+// hands the DMA the next free buffer, and poll_rx() delivers completed frames from
+// the main loop. The system clock is run at 120 MHz so a 50 ns half-bit is an exact
+// 6 PIO cycles.
 //
 // The link comes up by autonegotiation, or by parallel detection for a peer that
 // only sends NLPs. Link pulses -- NLPs and FLP bursts -- go out from a timer alarm
@@ -59,14 +60,13 @@ class Phy {
     };
     static constexpr Pins DEFAULT_PINS{.txp = 2, .txn = 3, .rxd = 8, .rxc = 9};
 
-    // Outcome of a receive poll. `frame` aliases an internal buffer valid until the
-    // next poll_rx() call.
+    // Outcome of a receive poll. `frame` aliases its capture buffer, which stays
+    // valid until release_rx().
     struct RxFrame {
         enum class Kind : std::uint8_t {
-            None,   // no completed reception this poll
-            Frame,  // a byte-aligned destination..FCS frame is ready in `frame`
-            Glitch, // carrier came and went without a decodable frame (no SFD)
-            Error,  // a frame was captured but rejected by the MAC checks (`error`)
+            None,  // no completed reception this poll
+            Frame, // a byte-aligned destination..FCS frame is ready in `frame`
+            Error, // a frame was captured but rejected by the MAC checks (`error`)
         };
         Kind kind{Kind::None};
         std::span<const std::uint8_t> frame{}; // destination..FCS when Kind::Frame
@@ -110,13 +110,18 @@ class Phy {
     // Call from the loop.
     void service();
 
-    // Dequeues one frame the end-of-frame interrupt captured, recovers it in a
-    // single pass, and returns it; None when the completed-frame queue is empty.
-    // Call from the main loop.
+    // Checks the oldest frame the end-of-frame interrupt captured and returns it;
+    // None when the completed-frame queue is empty. Any other result stays queued
+    // until release_rx(), which must come before the next poll_rx(). Call from the
+    // main loop.
     [[nodiscard]] RxFrame poll_rx();
 
-    // True when a completed frame is waiting in the pool, without the cost of
-    // recovering it. Lets the drain test for work before touching the USB path.
+    // Dequeues the frame the last poll_rx() returned, handing its buffer back to the
+    // capture.
+    void release_rx() { rx_ring_.release(); }
+
+    // True when a completed frame is waiting in the pool. Lets the drain test for
+    // work before touching the USB path.
     [[nodiscard]] bool rx_pending() const { return rx_ring_.peek().has_value(); }
 
     // Whether autonegotiation or parallel detection has brought the link up, and the
@@ -127,6 +132,12 @@ class Phy {
     // Running count of frames dropped because the receive buffer pool was exhausted
     // (the drain fell behind line rate). A visible, counted drop, not a silent loss.
     [[nodiscard]] std::uint32_t rx_pool_overflow() const { return rx_ring_.overflow(); }
+
+    // Running counts of captures dropped at the end of their carrier: carriers that
+    // outlasted a link pulse but never showed an SFD, and frames whose carrier
+    // dropped without TP_IDL.
+    [[nodiscard]] std::uint32_t rx_glitches() const { return rx_glitches_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint32_t rx_truncated() const { return rx_truncated_.load(std::memory_order_relaxed); }
 
     // Running counts of transmitted frames: clean ones, and ones the TX FIFO ran dry
     // in, which end on the wire where their data ran out.
@@ -171,12 +182,15 @@ class Phy {
 
     Pins pins_;
     PIO pio_{pio0};
+    PIO rx_pio_{pio1};
     std::uint32_t sm_tx_{0};
     std::uint32_t sm_rx_{0};
     std::uint32_t sm_qualify_{0};
+    std::uint32_t sm_watchdog_{0};
     std::uint32_t offset_tx_{0};
     std::uint32_t offset_rx_{0};
     std::uint32_t offset_qualify_{0};
+    std::uint32_t offset_watchdog_{0};
     pio_sm_config tx_cfg_{};
     pio_sm_config rx_cfg_{};
     std::int32_t dma_tx_{-1};
@@ -237,6 +251,11 @@ class Phy {
     std::atomic<std::uint32_t> collision_elapsed_us_{0};
     std::atomic<std::uint32_t> tx_start_us_{0};
 
+    // The qualification interrupt clears the qualifier's flag, so it records here
+    // that the carrier qualified, for the end-of-frame interrupt to tell a carrier
+    // from a link pulse.
+    std::atomic<bool> carrier_qualified_{false};
+
     // Carrier blips that decoded no data are link pulses, timed from their rising
     // edge and decoded in the carrier interrupt.
     std::uint32_t carrier_asserted_us_{0};
@@ -261,13 +280,14 @@ class Phy {
     std::array<std::uint8_t, JAM_OCTETS> jam_{};
 
     // The RX SM autopushes four recovered octets per 32-bit FIFO word; DMA lands
-    // them densely into the current pool buffer. A worst case capture is a
-    // full-preamble max wire frame plus the trailing carrier octets needed to flush
-    // the word that holds the final FCS octet.
-    static constexpr std::size_t RX_TRAILING_OCTETS{RX_OCTETS_PER_WORD - 1};
+    // them densely into the current pool buffer. A maximum-size frame and the one
+    // pad octet it needs at least is the longest capture that ends on TP_IDL; any
+    // longer one fills the buffer, and is told apart as a giant by its length alone.
     static constexpr std::size_t RX_WORD_CAPACITY{
-        (WIRE_CAPACITY + RX_TRAILING_OCTETS + RX_OCTETS_PER_WORD - 1) / RX_OCTETS_PER_WORD};
+        (MAX_FRAME_WITH_FCS + 1 + RX_OCTETS_PER_WORD - 1) / RX_OCTETS_PER_WORD};
     static constexpr std::size_t RX_OCTET_CAPACITY{RX_WORD_CAPACITY * RX_OCTETS_PER_WORD};
+    static_assert(
+        RX_OCTET_CAPACITY > MAX_FRAME_WITH_FCS && RX_OCTET_CAPACITY - RX_OCTETS_PER_WORD <= MAX_FRAME_WITH_FCS);
 
     // A pool of capture buffers so the DMA can start the next frame the instant one
     // ends (the EOF interrupt hands it a free buffer) while the main loop is still
@@ -278,14 +298,12 @@ class Phy {
     alignas(std::uint32_t) std::array<std::array<std::uint8_t, RX_OCTET_CAPACITY>, RX_POOL_SIZE> rx_pool_{};
     RxSlotRing<RX_POOL_SIZE> rx_ring_{};
 
-    // Written only in on_rx_eof() (end-of-frame interrupt), and consumed by the loop
-    // as received frames for the link integrity test.
+    // Written only in on_rx_eof() (end-of-frame interrupt). Captures are consumed by
+    // the loop as received frames for the link integrity test.
     std::atomic<std::uint32_t> rx_captures_{0};
     std::uint32_t rx_captures_seen_{0};
-
-    // The drain unpacks the packed capture words straight into rx_frame_ as the
-    // byte-aligned destination..FCS frame in a single pass. Main-loop-owned.
-    std::array<std::uint8_t, WIRE_CAPACITY> rx_frame_{};
+    std::atomic<std::uint32_t> rx_glitches_{0};
+    std::atomic<std::uint32_t> rx_truncated_{0};
 };
 
 } // namespace pico_ethernet

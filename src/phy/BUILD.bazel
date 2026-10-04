@@ -21,8 +21,8 @@ cc_library(
 )
 
 cc_library(
-    name = "rx_frame_recover",
-    hdrs = ["rx_frame_recover.h"],
+    name = "rx_frame_end",
+    hdrs = ["rx_frame_end.h"],
     visibility = ["//visibility:public"],
     deps = [
         "//src/mac:crc32",
@@ -34,7 +34,15 @@ cc_library(
     name = "rx_pio_config",
     hdrs = ["rx_pio_config.h"],
     visibility = ["//visibility:public"],
-    deps = ["@pico-sdk//src/rp2_common/hardware_pio"],
+    deps = [
+        ":phy_timing",
+        ":rx_frame_end",
+        ":rx_pio",
+        "//src/mac:crc32",
+        "//src/mac:ethernet_frame",
+        "@pico-sdk//src/rp2_common/hardware_dma",
+        "@pico-sdk//src/rp2_common/hardware_pio",
+    ],
     target_compatible_with = ["@pico-sdk//bazel/constraint:rp2350"],
 )
 
@@ -42,6 +50,7 @@ cc_library(
     name = "rx_slot_ring",
     hdrs = ["rx_slot_ring.h"],
     visibility = ["//visibility:public"],
+    deps = ["//src/util:single_writer"],
 )
 
 cc_library(
@@ -119,13 +128,14 @@ cc_library(
         ":link_state",
         ":phy_stats",
         ":phy_timing",
-        ":rx_frame_recover",
+        ":rx_frame_end",
         ":rx_pio",
         ":rx_pio_config",
         ":rx_slot_ring",
         ":tx_level",
         ":tx_level_pio",
         "//src/mac:ethernet_frame",
+        "//src/util:single_writer",
         "@pico-sdk//src/rp2_common/hardware_clocks",
         "@pico-sdk//src/rp2_common/hardware_dma",
         "@pico-sdk//src/rp2_common/hardware_gpio",

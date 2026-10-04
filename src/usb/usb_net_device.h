@@ -44,7 +44,7 @@ class UsbNetDevice {
     void initialize();
 
     // Main-loop dispatcher: drains host frames the ISR queued into the PHY transmit
-    // path and feeds recovered RX frames back to the host. USB itself is serviced
+    // path and feeds received RX frames back to the host. USB itself is serviced
     // from the interrupt, not here.
     void task();
 

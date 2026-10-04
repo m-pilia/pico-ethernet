@@ -1,12 +1,11 @@
 ; SPDX-License-Identifier: MIT
 ; Copyright (c) 2026 Martino Pilia
 ;
-; RX state machine: recovers the 10BASE-T Manchester bit stream sliced by the
-; comparator front-end back into wire-frame octets. IN base = RXD (data slicer,
-; GP8); IN base + 1 = RXC (carrier detect, GP9); JMP pin = RXD. Bits are shifted
-; in LSB-first (IEEE 802.3) and autopushed a full 32-bit word (four octets) at a
-; time, so the RX DMA moves four times less data than a byte-per-word push and the
-; landing buffer is packed dense; the CPU unpacks the four octets per word.
+; Receive state machines: recover the 10BASE-T Manchester bit stream sliced by the
+; comparator front-end back into frame octets, from the first destination octet to
+; the last FCS octet. IN base = RXD (data slicer); IN base + 1 = RXC (carrier
+; detect); JMP pin = RXD. Both programs run on the same PIO block and share its IRQ
+; flags.
 ;
 ; Manchester convention (matching tx_level.pio): data bit 1 = -V then +V, data
 ; bit 0 = +V then -V. RXD is the sign of the differential, so RXD is low in a
@@ -15,34 +14,92 @@
 ; high -> bit 0. There is always a mid-bit transition, whose direction is set by
 ; the data bit, so it is used to resync every bit.
 ;
-; Timing (120 MHz, 12 cycles/bit, 6 cycles/half-bit, /1 clock, phase-matched to
-; the transmit SMs). Each iteration samples the current bit's first-half level to
-; pick the mid-bit edge direction, blocks on that edge to resync, records the bit,
-; then advances so the loop is exactly 12 cycles: the SM reaches the next resync
-; `wait` two cycles before the edge appears, so the `wait` blocks and re-locks
-; every bit (no free-running drift), and the next sample lands at the centre of
-; the following bit's first half. Every offset is anchored to the resync edge, so
-; the input-synchronizer and comparator delays cancel. The `[4]` advance is
-; trimmed on-target against the automated RX self-test.
+; Timing (120 MHz, 12 cycles/bit, 6 cycles/half-bit, /1 clock). Each bit samples
+; its first-half level to pick the mid-bit edge direction, blocks on that edge to
+; resync, and then runs exactly 8 more cycles, so the next sample lands 9 cycles
+; after the edge: at the centre of the following bit's first half. Every offset is
+; anchored to the resync edge, so the input-synchronizer and comparator delays
+; cancel, and every branch below keeps that edge-to-sample distance.
+
+; Raised by tp_idl_watchdog when RXD has stayed high for longer than any Manchester
+; symbol: the start of TP_IDL.
+.define PUBLIC TP_IDL_FLAG 0
+; Raised by rx_manchester once the frame has ended on TP_IDL and its last octets
+; have been pushed.
+.define PUBLIC RX_DONE_FLAG 1
+
+; rx_manchester: gated on RXC, it first hunts the SFD, so nothing before the first
+; destination bit reaches the ISR, and every autopushed word is four frame-aligned
+; octets (shift right, LSB-first as IEEE 802.3 sends them).
 ;
-; The SM is gated on RXC so idle-line noise is ignored until a real carrier
-; appears; end-of-frame handling (carrier drop) and per-frame realignment are
-; driven from the CPU, which restarts the SM during the interframe gap.
+; The hunt samples each bit's first half into the ISR, and compares the last eight
+; samples with Y, which the CPU loads with the complement of the SFD octet before
+; every start. Rewriting the ISR resets its shift counter, so the hunt never
+; autopushes, and the frame's first word starts empty.
+;
+; The frame ends on TP_IDL: whatever the last bit was, the line is high at the next
+; sample, so the decoder waits for the falling edge of a 0. It only comes once
+; TP_IDL ends, and by then the watchdog has raised its flag, which the 0 branch
+; reads through the STATUS_SEL = IRQ status before shifting the bit in. The SM then
+; pads the ISR with zeros until it autopushes the frame's last octets, raises
+; RX_DONE_FLAG and parks until the CPU restarts it.
 
 .program rx_manchester
 
+    wait 1 pin 1             ; carrier present (RXC high)
+hunt:
+    in pins, 1               ; first-half level of the coming bit: the complement of the bit
+    jmp pin, hunt_high
+    wait 1 pin 0             ; resync on the rising mid-bit edge
+    jmp hunt_match
+hunt_high:
+    wait 0 pin 0 [1]         ; resync on the falling mid-bit edge; balance the jmp above
+hunt_match:
+    mov isr, isr             ; keep the samples, reset the shift counter
+    mov osr, isr
+    out null, 24             ; the last eight samples, oldest in bit 0
+    mov x, osr
+    jmp x!=y, hunt [1]
+    irq clear TP_IDL_FLAG    ; only a high after the SFD can end the frame
+
 .wrap_target
-    wait 1 pin 1             ; carrier present (RXC high) -> frame start
 decode:
     jmp pin, first_high      ; sample the first-half level of the current bit
     ; first half low -> data bit 1 (-V then +V)
     wait 1 pin 0             ; resync on the rising mid-bit edge
     set y, 1
-    jmp emit
+    in y, 1                  ; autopush at 32
+    jmp decode [5]
 first_high:                  ; first half high -> data bit 0 (+V then -V)
     wait 0 pin 0             ; resync on the falling mid-bit edge
-    set y, 0
-    nop                      ; balance the taken/!taken jmp so both branches align
-emit:
-    in y, 1 [4]              ; shift the data bit in (autopush at 32); advance to next first half
-    jmp decode
+    mov x, status            ; all ones once the watchdog has seen TP_IDL
+    jmp !x, shift_zero
+    set x, 31
+pad:
+    in null, 1               ; exactly one autopush: the residual is under 32 bits
+    jmp x--, pad
+    irq wait RX_DONE_FLAG
+shift_zero:
+    in null, 1 [5]           ; autopush at 32
+.wrap
+
+; tp_idl_watchdog: free-running on RXD, it raises TP_IDL_FLAG once a high run has
+; lasted the loop count the CPU loads into the OSR. Each loop iteration is 2 cycles
+; and samples RXD once, so the flag rises 2 * (OSR + 1) cycles after the rising
+; edge, and a fall inside the window restarts the wait. The loop count is derived
+; from that iteration length in start_tp_idl_watchdog() (rx_pio_config.h), so
+; reshaping the loop means updating it there.
+
+.program tp_idl_watchdog
+
+held:
+    jmp x--, hold
+    irq set TP_IDL_FLAG
+    wait 0 pin 0             ; wait out this high run
+public start:
+.wrap_target
+    mov x, osr
+    wait 1 pin 0             ; a high run starts
+hold:
+    jmp pin, held
+.wrap                        ; low again inside the window

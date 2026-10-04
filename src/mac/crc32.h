@@ -13,11 +13,6 @@ namespace pico_ethernet {
 
 // IEEE 802.3 FCS: reflected CRC-32 (polynomial 0xEDB88320), initial value all
 // ones, final inversion. The 256-entry lookup table is built at compile time.
-//
-// A target-only optimization could replace this with the RP2350 DMA CRC sniffer
-// (DMA_SNIFF_CRC32 with output bit-reverse + invert), which matches this
-// reflected/inverted convention and computes the FCS for free alongside a DMA
-// copy of the frame. The software table is kept for host tests and portability.
 namespace detail {
 
 constexpr std::array<std::uint32_t, 256> make_crc32_table() {
@@ -41,10 +36,17 @@ inline constexpr std::array<std::uint32_t, 256> CRC32_TABLE{make_crc32_table()};
 // fixed residual, letting a receiver validate destination..FCS in a single pass.
 inline constexpr std::uint32_t CRC32_RESIDUAL{0x2144DF1Cu};
 
+inline constexpr std::uint32_t CRC32_INIT{0xFFFFFFFFu};
+
+// One octet step of the running (pre-final-inversion) CRC.
+[[nodiscard]] constexpr std::uint32_t crc32_update(std::uint32_t crc, std::uint8_t byte) {
+    return detail::CRC32_TABLE[(crc ^ byte) & 0xFFu] ^ (crc >> 8);
+}
+
 [[nodiscard]] constexpr std::uint32_t crc32(std::span<const std::uint8_t> data) {
-    std::uint32_t crc{0xFFFFFFFFu};
+    std::uint32_t crc{CRC32_INIT};
     for (const std::uint8_t byte : data) {
-        crc = detail::CRC32_TABLE[(crc ^ byte) & 0xFFu] ^ (crc >> 8);
+        crc = crc32_update(crc, byte);
     }
     return crc ^ 0xFFFFFFFFu;
 }

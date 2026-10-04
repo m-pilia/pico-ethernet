@@ -240,6 +240,26 @@ gdb bazel-bin/src/pico_ethernet_firmware \
   -ex "p *ep" -ex "p/x *buf_reg" -ex "x/1xw 0x50110058"
 ```
 
+## Profiling
+
+Statistical profiling can be performed by sampling the PC through a debug
+probe, since the RP2350's Data Watchpoint and Trace (DWT) provides the Program
+Counter Sample Register (DWT_PCSR).
+
+This can be done e.g. with OpenOCD (limiting the code address range keeps the
+sampling bins focused on relevant functions and avoids the risk of both bin
+overflow and spreading the bins over irrelevant functions):
+```bash
+openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg -c "adapter speed 5000" \
+    -c "init" -c "targets rp2350.cm0" \
+    -c "profile 20 <out_file> <start_addr> <end_addr>" -c "shutdown"
+```
+
+The samples can then be attributed with the code:
+```bash
+arm-none-eabi-gprof -b -p bazel-bin/src/pico_ethernet_firmware <out_file>
+```
+
 ## Credits
 
 Most of the source code is LLM generated with a mix of models (GLM 5.3 and 5.2,
